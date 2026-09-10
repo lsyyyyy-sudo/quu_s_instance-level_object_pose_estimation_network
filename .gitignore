@@ -1,0 +1,112 @@
+# ============================================================
+#  大文件 / 原始数据 / 第三方代码 —— 一律不入库
+#  说明见 README.md 的「数据与参考资料」一节
+# ============================================================
+
+# 目标数据视频（277 MB，超过 GitHub 单文件 100 MB 硬限制）
+head_left_rgb_raw.mp4(1)/
+head_left_rgb_raw*.mp4
+__MACOSX/
+
+# 第三方论文与代码克隆（arXiv PDF + BoxDreamer + HCCEPose，共约 250 MB）
+refs/
+
+# 内部资料：考核题目原文（含内部链接，仅本地保留，不入库）
+docs/ASSIGNMENT.md
+
+# ============================================================
+#  Python
+# ============================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# 虚拟环境
+.venv/
+venv/
+ENV/
+env/
+.env
+.env.*
+!.env.example
+.python-version
+
+# 测试 / 类型检查 / 格式化缓存
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+.cache
+.mypy_cache/
+.dmypy.json
+.ruff_cache/
+.hypothesis/
+
+# ============================================================
+#  深度学习：权重、日志、训练产物
+# ============================================================
+*.pth
+*.pt
+*.ckpt
+*.onnx
+*.engine
+*.pkl
+*.h5
+*.safetensors
+
+checkpoints/
+weights/
+pretrained/
+lightning_logs/
+wandb/
+runs/
+logs/
+*.log
+events.out.tfevents.*
+
+# ============================================================
+#  数据集 / 渲染产物 / 推理输出
+# ============================================================
+data/
+datasets/
+dataset/
+train_pbr/
+test_pbr/
+
+outputs/
+output/
+results/
+vis/
+preds/
+
+# ============================================================
+#  编辑器 / 系统
+# ============================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
