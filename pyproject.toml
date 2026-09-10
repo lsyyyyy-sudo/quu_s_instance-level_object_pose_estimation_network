@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "corner-pose"
+version = "0.1.0"
+description = "Instance-level object pose estimation network predicting 8 box-corner heatmaps from a single RGB image"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+
+dependencies = [
+    "torch>=2.1",
+    "torchvision>=0.16",
+    "pytorch-lightning>=2.4",
+    "hydra-core>=1.3",
+    "omegaconf>=2.3",
+    "numpy>=1.24,<2.0",
+    "opencv-python>=4.8",
+    "Pillow>=10.0",
+    "einops>=0.7",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4", "black>=24.0", "ruff>=0.5"]
+log = ["tensorboard>=2.15", "wandb"]
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+# ---------------------------------------------------------------- #
+# 代码风格
+# ---------------------------------------------------------------- #
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = [
+    "E501",   # 行长由 black 管
+    "B008",   # hydra / lightning 里函数调用做默认值是常见写法
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-q"

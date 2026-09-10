@@ -7,7 +7,8 @@
   <img src="photo_of_the_project.png" width="520" alt="算法流程图">
 </p>
 
-**当前状态：🚧 进行中**（详细进度见 [§6 Roadmap](#6-roadmap)）
+**当前状态：🚧 进行中** —— 工程骨架（Hydra + Lightning）与网络实现已完成，有自检用例覆盖；
+**尚未在真实渲染数据上训练**（等阶段 ①② 的数据）。详细进度见 [§6 Roadmap](#6-roadmap)。
 
 ---
 
@@ -53,28 +54,68 @@
 
 ---
 
-## 2. 仓库结构（规划）
+## 2. 仓库结构
+
+工程骨架**对齐 [BoxDreamer](https://github.com/zju3dv/BoxDreamer)**：Hydra 配置驱动 + PyTorch Lightning，
+四层分离（入口 / 配置 / 数据 / 网络 / 训练）。砍掉了 BoxDreamer 里**多视角专有**的部分
+（`modules/matcher/`、`modules/tracker/`、`sources/vggsfm/`、`three/dust3r/`、`src/reconstruction/`），
+因为本项目的输入是**单张 RGB 图**。
 
 ```
 .
-├── README.md
-├── .gitignore
-├── docs/
-│   └── REFERENCES.md          # 参考论文 / 代码的阅读索引
-├── photo_of_the_project.png   # 算法流程图
-│
-├── configs/                   # 训练 / 模型 / 数据配置
+├── run.py                                      # Hydra 统一入口（对应 BoxDreamer/run.py）
+├── configs/
+│   ├── train.yaml / test.yaml                  # defaults 组合各配置组
+│   ├── trainer/default.yaml                    # Lightning Trainer
+│   ├── model/heatmap.yaml                      # _target_: PL_CornerPose
+│   ├── model/{loss,opt,metrics,vis}/default.yaml
+│   ├── datamodule/bop.yaml                     # _target_: CornerPoseDataModule
+│   ├── callbacks/ logger/ hydra/
 ├── src/
-│   ├── datasets/              # 数据加载、角点标签生成
-│   ├── models/                # 网络结构（backbone + heatmap head）
-│   ├── loss/                  # 热图损失
-│   ├── train.py               # 训练入口
-│   ├── infer.py               # 单图 / 视频推理
-│   └── utils/                 # 角点定义、投影、PnP、可视化
-└── scripts/                   # 数据准备与渲染调用脚本
+│   ├── datamodules/corner_pose_datamodule.py   # LightningDataModule
+│   ├── datasets/bop_pbr.py                     # BOP PBR 读取 + 裁剪 + 热图标签
+│   ├── lightning/
+│   │   ├── corner_pose_lightning_model.py      # PL_CornerPose（对应 PL_BoxDreamer）
+│   │   └── utils/{metrics,vis}.py
+│   ├── models/
+│   │   ├── CornerPoseModel.py                  # 纯 nn.Module（对应 BoxDreamerModel.py）
+│   │   ├── modules/backbone/{resnet,vit}.py    # 图里的 "ResNet / ViT"
+│   │   ├── modules/decoder/heatmap_head.py     # 8 通道角点热图
+│   │   └── utils/{box_utils,pose_utils,prediction_utils,data_processing}.py
+│   ├── loss/{loss.py, utils/focal_loss.py}     # 热图 focal loss
+│   └── utils/{log.py, customize/template_utils.py}
+├── tests/                                      # 自检用例（不需要数据）
+├── requirements.txt / pyproject.toml
+├── docs/REFERENCES.md
+└── photo_of_the_project.png
 ```
 
-> 目录将随实现逐步补齐。
+### 与 BoxDreamer 的对应关系
+
+| BoxDreamer | 本项目 | 说明 |
+|---|---|---|
+| `run.py`（Hydra 入口） | `run.py` | 同 |
+| `configs/` 分层 `defaults` | `configs/` | 同 |
+| `src/lightning/BoxDreamer_lightning_model.py` → `PL_BoxDreamer` | `src/lightning/corner_pose_lightning_model.py` → `PL_CornerPose` | 模块名与类名不同，避免 `import` 被遮蔽 |
+| `src/datamodules/` | `src/datamodules/` | 同 |
+| `src/models/BoxDreamerModel.py` | `src/models/CornerPoseModel.py` | 都是纯 `nn.Module`，不含训练逻辑 |
+| `src/models/utils/box_utils.py` | 同名 | **bb8 角点顺序与 PnP 逻辑一致** |
+| `src/models/modules/{backbone,encoder,matcher,tracker}` | `modules/{backbone,decoder}` | ✂️ 砍掉 `matcher` / `tracker`（多视角专有） |
+| `src/models/sources/{DINOv2,vggsfm,cotracker}` | 无（DINOv2 走 `torch.hub`） | 不 vendor 第三方代码 |
+| `three/dust3r`、`src/reconstruction/` | 无 | 多视角重建，本项目不需要 |
+
+### 数据流
+
+```
+BOP train_pbr ──► BOPPBRDataset ──► 裁剪+缩放 ──► 合成数据增强
+                      │
+                      └─► 投影 8 个 3D 角点 ─► 高斯热图标签 [8, h, w]
+
+image [B,3,H,W] ──► CornerPoseModel(ResNet/DINOv2 + FPN 解码器) ──► [B,8,h,w] logits
+                          │
+                          ├─► CornerHeatmapLoss（focal）  ← 训练
+                          └─► soft-argmax ─► 2D 角点 ─► solvePnP ─► R,t   ← 推理
+```
 
 ---
 
@@ -102,14 +143,47 @@ git clone --depth 1 https://github.com/WangYuLin-SEU/HCCEPose.git
 
 ---
 
-## 4. 环境
+## 4. 环境与快速开始
 
 | 用途 | 要求 |
 |---|---|
-| 训练 / 推理 | Python 3.10+，PyTorch（CUDA），OpenCV |
-| 合成数据渲染 | Ubuntu + BlenderProc + `bpy` + EGL（⚠️ Windows 上通常无法运行） |
+| 训练 / 推理 | Python 3.10+，PyTorch（建议 CUDA 版）、pytorch-lightning、hydra-core、OpenCV |
+| 合成数据渲染 | Ubuntu + BlenderProc + `bpy` + EGL（⚠️ Windows 上通常无法运行），见 [HCCEPose](https://github.com/WangYuLin-SEU/HCCEPose) |
 
-> 渲染环境与训练环境建议使用**独立**的 conda / venv，HCCEPose 的依赖钉得较死。
+> 渲染环境与训练环境请使用**独立**的环境，HCCEPose 的依赖钉得较死。
+
+```bash
+# 1) 安装依赖（torch 按自己的 CUDA 版本从官方源装）
+pip install -r requirements.txt
+
+# 2) 自检：不需要任何数据，覆盖几何 / 网络 / 配置装配三部分
+pytest tests/ -v
+
+# 3) 看一下组合后的完整配置
+python run.py --config-name=train.yaml --cfg job
+
+# 4) 训练 / 测试
+python run.py --config-name=train.yaml
+python run.py --config-name=test.yaml exp_name=<实验名>
+```
+
+数据集路径等都可以在命令行覆盖：
+
+```bash
+python run.py --config-name=train.yaml \
+    datamodule.dataset_root=/path/to/dji_action4 \
+    max_epochs=100 \
+    model.modules.encoder.resnet.cfg.pretrained=false
+```
+
+### Windows 中文日志乱码
+
+Windows 控制台默认输出编码是 GBK，重定向或管道时中文会显示成乱码（源文件本身是合法 UTF-8）。
+临时解决：
+
+```powershell
+$env:PYTHONUTF8=1        # 或 $env:PYTHONIOENCODING="utf-8"
+```
 
 ---
 
@@ -128,11 +202,13 @@ git clone --depth 1 https://github.com/WangYuLin-SEU/HCCEPose.git
 |:---:|---|:---:|
 | 1 | 获取目标物体 3D 模型并转换为 BOP 格式 | ⬜ 未开始 |
 | 2 | 搭建 BlenderProc 渲染环境，跑通合成数据生成 | ⬜ 未开始 |
-| 3 | 从 GT 位姿生成 8 角点 2D 标签 | ⬜ 未开始 |
-| 4 | 实现单图角点热图网络 | ⬜ 未开始 |
+| 3 | 从 GT 位姿生成 8 角点 2D 标签 | 🟡 代码就绪，待真实数据验证 |
+| 4 | 实现单图角点热图网络 | 🟡 代码就绪，待真实数据验证 |
 | 5 | 在渲染数据上训练（含域随机化与数据增强） | ⬜ 未开始 |
 | 6 | 在目标视频上测试并可视化 | ⬜ 未开始 |
-| 7 | 定量评估与误差分析 | ⬜ 未开始 |
+| 7 | 定量评估与误差分析 | 🟡 指标代码就绪 |
+
+> 「代码就绪」= 逻辑已实现并有自检用例覆盖，但还没在**真实渲染数据**上跑通。
 
 ---
 

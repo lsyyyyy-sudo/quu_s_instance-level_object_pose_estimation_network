@@ -1,0 +1,11 @@
+# 评估指标配置
+# 角点 2D 误差阈值（按 GT 2D 包围框对角线归一化后的比例）
+corner_pck_thresholds: [0.05, 0.10, 0.15]
+
+# 位姿指标
+pose_5cm5deg: true          # 报告 5cm/5° 命中率（单位跟随 3D 模型，见 docs）
+add_symmetric: false        # 目标物体是否旋转对称。DJI Action 4 非对称，保持 false
+pose_unit_scale: 1.0        # 3D 模型单位 -> mm 的换算系数（渲染数据为 mm 时填 1.0）
+
+# 是否用 PnP 从预测角点解位姿（否则只评估 2D 角点误差）
+solve_pose: true

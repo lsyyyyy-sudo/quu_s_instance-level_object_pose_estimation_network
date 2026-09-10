@@ -1,0 +1,35 @@
+# ============================================================
+#  核心依赖（训练 / 推理）
+# ============================================================
+# PyTorch：按自己的 CUDA 版本从官方源装，例如
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+torch>=2.1
+torchvision>=0.16
+
+# 训练框架（对齐 BoxDreamer 的工程结构）
+pytorch-lightning>=2.4
+hydra-core>=1.3
+omegaconf>=2.3
+
+# 数据处理
+numpy>=1.24,<2.0
+opencv-python>=4.8
+Pillow>=10.0
+einops>=0.7
+
+# 日志
+rich>=13.0
+
+# ============================================================
+#  可选
+# ============================================================
+# tensorboard>=2.15     # configs/logger/default.yaml 里的 tensorboard
+# wandb                 # 同上，把 wandb 加进 logger.in_use 即可
+# pytest>=7.4           # 跑 tests/
+
+# ============================================================
+#  渲染环境是**另一套**依赖，不要装进这个环境
+# ============================================================
+# 合成数据渲染需要 Ubuntu + BlenderProc + bpy，见 HCCEPose：
+#   https://github.com/WangYuLin-SEU/HCCEPose
+# Python 3.10 + torch 2.8.0+cu128 + bpy==3.6.0 + EGL

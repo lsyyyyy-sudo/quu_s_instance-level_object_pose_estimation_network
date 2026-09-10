@@ -1,0 +1,14 @@
+# 优化器与学习率调度配置
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1.0e-4
+  weight_decay: 1.0e-4
+  betas: [0.9, 0.999]
+
+scheduler:
+  _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+  T_max: ${max_epochs}
+  eta_min: 1.0e-6
+
+# 是否启用 warmup（按 step 线性升温）
+warmup_epochs: 0

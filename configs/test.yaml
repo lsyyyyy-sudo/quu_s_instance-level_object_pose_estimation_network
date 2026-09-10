@@ -1,0 +1,29 @@
+# 测试入口配置。
+# 用法：python run.py --config-name=test.yaml exp_name=<你的实验名>
+defaults:
+  - trainer: default
+  - model: heatmap
+  - datamodule: bop
+  - callbacks: default
+  - logger: default
+  - hydra: default
+  - _self_
+
+seed: 42
+max_epochs: 1
+exp_name: corner_pose_test
+pretrain_name: corner_pose_train
+
+mode: 'test'
+
+use_pretrained: true
+resume: false
+
+num_keypoints: 8
+bbox_representation: 'heatmap'
+corner_order: 'bb8'
+
+image_size: 256
+heatmap_size: 64
+
+precision: '32-true'

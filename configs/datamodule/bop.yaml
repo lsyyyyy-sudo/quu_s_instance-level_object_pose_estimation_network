@@ -1,0 +1,38 @@
+# 数据模块配置：读取 BOP 格式的合成渲染数据（由 HCCEPose 的 BlenderProc 脚本产出）
+# 对应 BoxDreamer/configs/datamodule/local.yaml
+_target_: src.datamodules.corner_pose_datamodule.CornerPoseDataModule
+
+# 数据集根目录，结构需为：
+#   <dataset_root>/models/models_info.json
+#   <dataset_root>/train_pbr/000000/{rgb,scene_gt.json,scene_camera.json,...}
+dataset_root: ${hydra:runtime.cwd}/data/dji_action4
+
+train_split: train_pbr
+val_split: train_pbr
+val_ratio: 0.05          # 从 train 里切一小部分做验证
+
+obj_ids: [1]             # 目标物体 id（BOP 里对应 models/obj_000001.ply）
+batch_size: 16
+num_workers: 4
+pin_memory: true
+
+# 分辨率与热图
+image_size: ${image_size}
+heatmap_size: ${heatmap_size}
+sigma: 2.0               # 高斯热图标准差（heatmap 像素单位）
+
+# 裁剪：按物体 2D 包围框外扩，模拟检测器给出的框
+crop_scale: 1.4          # 外扩系数
+use_gt_crop: true        # true 用 GT 框裁剪（训练用），false 用整图（更接近真实）
+
+# 数据增强（模拟真实视频的域差异）
+augment: true
+aug_color_jitter: 0.3
+aug_blur_prob: 0.3
+aug_noise_std: 0.02
+aug_random_crop_jitter: 0.1
+
+# 调试用：限制样本数（null = 不限制）
+max_train_samples: null
+max_val_samples: 512
+shuffle_train: true

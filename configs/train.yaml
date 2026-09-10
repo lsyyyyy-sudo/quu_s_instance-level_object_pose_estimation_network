@@ -1,0 +1,34 @@
+# 训练入口配置。
+# 用法：python run.py --config-name=train.yaml
+#
+# 结构与 BoxDreamer/configs/train.yaml 一致：用 defaults 组合各子配置组。
+defaults:
+  - trainer: default
+  - model: heatmap
+  - datamodule: bop
+  - callbacks: default
+  - logger: default
+  - hydra: default
+  # _self_ 放在最后：本文件里的键优先于各配置组（BoxDreamer 漏了这个，会报 warning）
+  - _self_
+
+seed: 42
+max_epochs: 500
+exp_name: corner_pose_train
+pretrain_name: corner_pose
+
+mode: 'train'          # 'train' 或 'test'
+resume: false          # true 则从 checkpoints/${exp_name}/last.ckpt 续训
+use_pretrained: false  # true 则从 checkpoints/${pretrain_name}/last.ckpt 加载权重
+
+# ---- 任务超参（被 model / datamodule 用 ${...} 引用）----
+num_keypoints: 8       # 3D 包围盒的 8 个角点
+bbox_representation: 'heatmap'   # heatmap | voting | cornernet（当前只实现 heatmap）
+corner_order: 'bb8'              # 角点顺序约定，见 src/models/utils/box_utils.py
+
+# ---- 分辨率 ----
+image_size: 256        # 网络输入边长
+heatmap_size: 64       # 输出热图边长（image_size / 4）
+
+# ---- 运行环境 ----
+precision: '32-true'   # 有 CUDA 时建议改成 'bf16-mixed'

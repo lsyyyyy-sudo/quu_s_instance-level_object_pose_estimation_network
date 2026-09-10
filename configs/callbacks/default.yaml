@@ -1,0 +1,20 @@
+# Lightning Callbacks
+# 注意 BoxDreamer 的续训机制：s3_p2 风格地扫描 checkpoints 目录下的 last.ckpt
+model_checkpoint:
+  _target_: pytorch_lightning.callbacks.ModelCheckpoint
+  dirpath: ${hydra:runtime.cwd}/checkpoints/${exp_name}
+  filename: 'last'
+  save_last: true
+  save_top_k: 1
+  monitor: 'val/corner_err_px'
+  mode: 'min'
+  auto_insert_metric_name: false
+  verbose: true
+
+learning_rate_monitor:
+  _target_: pytorch_lightning.callbacks.LearningRateMonitor
+  logging_interval: 'epoch'
+
+rich_model_summary:
+  _target_: pytorch_lightning.callbacks.RichModelSummary
+  max_depth: 3

@@ -1,0 +1,6 @@
+# Hydra 自身配置：所有输出集中到 outputs/${exp_name}/ 下
+run:
+  dir: ${hydra:runtime.cwd}/outputs/${exp_name}/${now:%Y-%m-%d_%H-%M-%S}
+
+job:
+  chdir: false          # 不要改工作目录，否则相对路径会乱

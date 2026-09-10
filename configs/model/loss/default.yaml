@@ -1,0 +1,13 @@
+# 角点热图损失配置
+_target_: src.loss.loss.CornerHeatmapLoss
+
+# CenterNet 风格 focal loss（对正样本邻近做负样本衰减）
+focal_weight: 1.0
+focal_alpha: 2.0
+focal_beta: 4.0
+
+# 亚像素偏移回归（仅当 modules.decoder.offset=true 时生效）
+offset_weight: 0.0
+
+# 数值稳定性
+eps: 1.0e-6

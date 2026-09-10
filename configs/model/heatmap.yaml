@@ -1,0 +1,52 @@
+# 模型配置：单图 -> 8 角点热图
+# 对应 BoxDreamer/configs/model/transformer.yaml
+#
+# 注意 run.py 用 hydra.utils.instantiate(config["model"], _recursive_=False) 实例化，
+# 因此这里 _target_ 指向 LightningModule，子配置（loss/opt/metrics/vis）原样传进去。
+defaults:
+  - loss: default
+  - opt: default
+  - metrics: default
+  - vis: default
+
+_target_: src.lightning.corner_pose_lightning_model.PL_CornerPose
+
+resume_ckpt: "${hydra:runtime.cwd}/checkpoints/${exp_name}/last.ckpt"
+pretrained_ckpt: "${hydra:runtime.cwd}/checkpoints/${pretrain_name}/last.ckpt"
+
+modules:
+  # ---- 主干网络（图里的 "ViT/ResNet"）----
+  encoder:
+    name: 'resnet'          # 'resnet' | 'dinov2'
+    resnet:
+      ckpt_path: null
+      cfg:
+        model_type: 'resnet18'
+        pretrained: true
+        freeze: false
+        out_indices: [0, 1, 2, 3]   # layer1..layer4
+    dinov2:
+      ckpt_path: null
+      cfg:
+        model_type: 'dinov2_vitb14'   # 走 torch.hub，需要联网
+        freeze: true
+
+  # ---- 热图解码头 ----
+  decoder:
+    hidden_dim: 128
+    num_keypoints: ${num_keypoints}
+    heatmap_size: ${heatmap_size}
+    upsample_mode: 'bilinear'
+    head_type: 'heatmap'    # heatmap | heatmap_offset
+    offset: false           # true 则额外回归亚像素偏移
+
+  # ---- 任务设定 ----
+  task:
+    num_keypoints: ${num_keypoints}
+    bbox_representation: ${bbox_representation}
+    corner_order: ${corner_order}
+    image_size: ${image_size}
+    heatmap_size: ${heatmap_size}
+    # 推理时从热图提角点的方式
+    extraction: 'soft_argmax'   # soft_argmax | argmax
+    soft_argmax_beta: 100.0
