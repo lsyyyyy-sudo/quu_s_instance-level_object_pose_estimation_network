@@ -26,6 +26,11 @@ num_keypoints: 8       # 3D 包围盒的 8 个角点
 bbox_representation: 'heatmap'   # heatmap | voting | cornernet（当前只实现 heatmap）
 corner_order: 'bb8'              # 角点顺序约定，见 src/models/utils/box_utils.py
 
+# 热图风格：决定 GT 热图、输出激活与默认损失，model 与 datamodule 共用这一个源
+#   'boxdreamer' —— 尺度自适应衰减，取值 [-1, 1]，配 smooth_l1（临摹 BoxDreamer）
+#   'centernet'  —— 固定 σ 标准高斯，取值 [0, 1]，配 focal
+heatmap_style: 'boxdreamer'
+
 # ---- 分辨率 ----
 image_size: 256        # 网络输入边长
 heatmap_size: 64       # 输出热图边长（image_size / 4）

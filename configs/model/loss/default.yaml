@@ -1,13 +1,29 @@
 # 角点热图损失配置
+# 对应 BoxDreamer 论文 Sec 3.3：L = L_coarse + λ · L_fine，λ = 2.0
 _target_: src.loss.loss.CornerHeatmapLoss
 
-# CenterNet 风格 focal loss（对正样本邻近做负样本衰减）
-focal_weight: 1.0
+# ---- 粗损失：整张热图 ----
+# 'smooth_l1' 对齐 BoxDreamer 的官方配置；'focal' 是 CenterNet 风格备选
+heatmap_loss: 'smooth_l1'
+heatmap_weight: 1.0
+smooth_l1_beta: 1.0
+
+# 仅 heatmap_loss='focal' 时生效
 focal_alpha: 2.0
 focal_beta: 4.0
 
-# 亚像素偏移回归（仅当 modules.decoder.offset=true 时生效）
+# ---- 细损失：8 个角点坐标（论文里的 λ）----
+fine_weight: 2.0
+fine_loss: 'smooth_l1'
+# soft-argmax 温度。热图已归一化到 [0, 1]。
+# 实测（30 组随机角点，BoxDreamer 风格 GT 热图，64×64）：
+#   beta=1   -> 平均误差 19.0 px   ← 会严重偏向热图质心，绝不能这么设
+#   beta=10  -> 1.26 px
+#   beta=25  -> 0.25 px            ← 默认值，实测最优
+#   beta=100 -> 0.38 px            ← 开始饱和
+fine_beta: 25.0
+
+# ---- 亚像素偏移回归（仅当 modules.decoder.offset=true 时生效）----
 offset_weight: 0.0
 
-# 数值稳定性
 eps: 1.0e-6

@@ -47,6 +47,20 @@ modules:
     corner_order: ${corner_order}
     image_size: ${image_size}
     heatmap_size: ${heatmap_size}
-    # 推理时从热图提角点的方式
-    extraction: 'soft_argmax'   # soft_argmax | argmax
-    soft_argmax_beta: 100.0
+
+    # 热图风格（与 datamodule 共用根配置里的同一个键）
+    heatmap_style: ${heatmap_style}
+
+    # 推理时从热图提角点的方式：
+    #   'topk'        —— top-k 位置求平均，**BoxDreamer 官方做法**（k=20）
+    #   'soft_argmax' —— 空间 softmax 求期望（亚像素）
+    #   'argmax'      —— 取最大值位置
+    #
+    # 实测对比（30 组随机角点，BoxDreamer 风格 GT 热图，64×64，单位=热图像素）：
+    #   soft_argmax(beta=25)  平均 0.25  p95 0.44  max 10.2   ← 干净热图上最准
+    #   topk(20)              平均 0.76  p95 0.27  max 43.0   ← 尾巴更稳
+    #   argmax                平均 0.74  p95 0.62  max 49.0   ← 尾巴最差
+    # 目前默认跟 BoxDreamer 用 topk；等有真实训练模型后应用验证集实测再定。
+    extraction: 'topk'
+    topk: 20
+    soft_argmax_beta: 25.0

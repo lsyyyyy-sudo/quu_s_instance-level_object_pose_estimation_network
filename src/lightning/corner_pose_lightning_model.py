@@ -70,22 +70,29 @@ class PL_CornerPose(pl.LightningModule):
         losses = self.loss_fn(
             out["pred_heatmap"],
             batch["heatmap"],
-            pred_offset=out.get("pred_offset"),
             corner_2d=batch["corner_2d"],
             image_size=self.model.image_size,
             heatmap_size=self.model.heatmap_size,
+            pred_offset=out.get("pred_offset"),
+            heatmap_range=self.model.heatmap_range,
         )
 
-        preds = predict_corners_and_pose(
-            out["pred_heatmap"],
-            batch["bbox_3d"],
-            batch["cam_K"],
-            image_size=self.model.image_size,
-            heatmap_size=self.model.heatmap_size,
-            method=self.model.extraction,
-            beta=self.model.soft_argmax_beta,
-            solve_pose=bool(self.metrics_cfg.get("solve_pose", True)),
-        )
+        # 提角点 + PnP 只用于评估，不需要梯度。
+        # 必须放在 no_grad 里：否则这些张量带着 grad_fn 被累积到 epoch 末尾，
+        # 会把整条计算图钉在显存里（每轮泄漏一次）。
+        with torch.no_grad():
+            preds = predict_corners_and_pose(
+                out["pred_heatmap"],
+                batch["bbox_3d"],
+                batch["cam_K"],
+                image_size=self.model.image_size,
+                heatmap_size=self.model.heatmap_size,
+                method=self.model.extraction,
+                beta=self.model.soft_argmax_beta,
+                k=self.model.topk,
+                heatmap_range=self.model.heatmap_range,
+                solve_pose=bool(self.metrics_cfg.get("solve_pose", True)),
+            )
         return {"out": out, "losses": losses, "preds": preds}
 
     # ------------------------------------------------------------------ #
@@ -98,7 +105,10 @@ class PL_CornerPose(pl.LightningModule):
         bs = batch["image"].shape[0]
         self.log("train/loss", losses["loss"], on_step=True, on_epoch=True,
                  prog_bar=True, batch_size=bs, sync_dist=True)
-        self.log("train/loss_focal", losses["loss_focal"], on_step=False, on_epoch=True,
+        # 分开记录粗/细两项，方便观察 λ=2.0 是否让细项把粗项压过头
+        self.log("train/loss_coarse", losses["loss_coarse"], on_step=False, on_epoch=True,
+                 batch_size=bs, sync_dist=True)
+        self.log("train/loss_fine", losses["loss_fine"], on_step=False, on_epoch=True,
                  batch_size=bs, sync_dist=True)
         return losses["loss"]
 

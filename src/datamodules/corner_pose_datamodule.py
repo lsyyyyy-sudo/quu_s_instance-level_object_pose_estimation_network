@@ -30,6 +30,7 @@ class CornerPoseDataModule(pl.LightningDataModule):
         pin_memory: bool = True,
         image_size: int = 256,
         heatmap_size: int = 64,
+        heatmap_style: str = "boxdreamer",
         sigma: float = 2.0,
         crop_scale: float = 1.4,
         use_gt_crop: bool = True,
@@ -57,11 +58,13 @@ class CornerPoseDataModule(pl.LightningDataModule):
 
         self._image_size = int(image_size)
         self._heatmap_size = int(heatmap_size)
+        self._heatmap_style = str(heatmap_style)
         self._sigma = float(sigma)
 
         self._train_kwargs = dict(
             image_size=self._image_size,
             heatmap_size=self._heatmap_size,
+            heatmap_style=self._heatmap_style,
             sigma=self._sigma,
             crop_scale=float(crop_scale),
             use_gt_crop=bool(use_gt_crop),

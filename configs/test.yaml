@@ -22,6 +22,7 @@ resume: false
 num_keypoints: 8
 bbox_representation: 'heatmap'
 corner_order: 'bb8'
+heatmap_style: 'boxdreamer'
 
 image_size: 256
 heatmap_size: 64

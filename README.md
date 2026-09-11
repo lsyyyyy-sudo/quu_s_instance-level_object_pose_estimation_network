@@ -86,7 +86,9 @@
 │   └── utils/{log.py, customize/template_utils.py}
 ├── tests/                                      # 自检用例（不需要数据）
 ├── requirements.txt / pyproject.toml
-├── docs/REFERENCES.md
+├── docs/
+│   ├── REFERENCES.md                           # 参考论文 / 代码的阅读索引
+│   └── TROUBLESHOOTING.md                      # 踩坑日志：每次运行遇到什么问题、怎么解决的
 └── photo_of_the_project.png
 ```
 
@@ -109,13 +111,34 @@
 ```
 BOP train_pbr ──► BOPPBRDataset ──► 裁剪+缩放 ──► 合成数据增强
                       │
-                      └─► 投影 8 个 3D 角点 ─► 高斯热图标签 [8, h, w]
+                      └─► 投影 8 个 3D 角点 ─► 热图标签 [8, h, w]
 
-image [B,3,H,W] ──► CornerPoseModel(ResNet/DINOv2 + FPN 解码器) ──► [B,8,h,w] logits
+image [B,3,H,W] ──► CornerPoseModel(ResNet/DINOv2 + FPN 解码器) ──► [B,8,h,w]
                           │
-                          ├─► CornerHeatmapLoss（focal）  ← 训练
-                          └─► soft-argmax ─► 2D 角点 ─► solvePnP ─► R,t   ← 推理
+                          ├─► 粗损失：整张热图 SmoothL1         ┐
+                          ├─► 细损失：soft-argmax 角点 SmoothL1 ├─ L = L_coarse + 2.0·L_fine
+                          │                                     ┘
+                          └─► top-20 提取 ─► 2D 角点 ─► solvePnP ─► R,t   ← 推理
 ```
+
+### 热图与损失：对齐 BoxDreamer 的实现细节
+
+这几处是**照 BoxDreamer 源码临摹**的，不是通用做法，改动前请先看
+[`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) 里的 `ALGO-01` / `ALGO-02`：
+
+| 项 | BoxDreamer 的做法 | 我们的实现 |
+|---|---|---|
+| 热图衰减 | `exp(-d / (s_i/10)²)`，`d` 是欧氏距离（**不是** `d²`），`s_i` 是角点 i 到物体 2D 中心的距离 | 同（`heatmap_style: 'boxdreamer'`） |
+| 热图值域 | 峰值归一化到 1 后映射到 **[-1, 1]** | 同 |
+| 网络输出 | `2·sigmoid(x) − 1` | 同 |
+| 粗损失 | `nn.SmoothL1Loss`（**不是** focal） | 同，另保留 `focal` 作备选 |
+| 细损失 | `L = L_coarse + λ·L_fine`，λ = 2.0 | 同，但用可微 soft-argmax 取角点（BoxDreamer 用单独回归头） |
+| 角点提取 | **top-20 位置求平均** | 同（另提供 `soft_argmax` / `argmax`） |
+
+> ⚠️ 两个容易踩的坑（都已实测并写进代码注释与测试）：
+> 1. fine loss 的 soft-argmax 温度 `beta=1.0` 会偏 **19 像素**，必须用 **25**；
+> 2. 角点贴近物体 2D 中心时原式会让热图退化成 δ 函数，使 top-k 出现大量并列、结果变成随机
+>    —— 已加 `min_scale` 下限保护。
 
 ---
 
@@ -156,7 +179,7 @@ git clone --depth 1 https://github.com/WangYuLin-SEU/HCCEPose.git
 # 1) 安装依赖（torch 按自己的 CUDA 版本从官方源装）
 pip install -r requirements.txt
 
-# 2) 自检：不需要任何数据，覆盖几何 / 网络 / 配置装配三部分
+# 2) 自检：不需要任何数据，覆盖几何 / 网络 / 损失 / 配置装配
 pytest tests/ -v
 
 # 3) 看一下组合后的完整配置
@@ -166,6 +189,10 @@ python run.py --config-name=train.yaml --cfg job
 python run.py --config-name=train.yaml
 python run.py --config-name=test.yaml exp_name=<实验名>
 ```
+
+> 跑之前建议看一眼 [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)：
+> 里面记录了环境、PowerShell、Hydra、Git 以及算法数值上踩过的坑（含已解决的和待解决的），
+> 也包含 Windows 中文乱码、显存泄漏、标签退化这些高频问题的排查清单。
 
 数据集路径等都可以在命令行覆盖：
 
@@ -203,12 +230,14 @@ $env:PYTHONUTF8=1        # 或 $env:PYTHONIOENCODING="utf-8"
 | 1 | 获取目标物体 3D 模型并转换为 BOP 格式 | ⬜ 未开始 |
 | 2 | 搭建 BlenderProc 渲染环境，跑通合成数据生成 | ⬜ 未开始 |
 | 3 | 从 GT 位姿生成 8 角点 2D 标签 | 🟡 代码就绪，待真实数据验证 |
-| 4 | 实现单图角点热图网络 | 🟡 代码就绪，待真实数据验证 |
+| 4 | 实现单图角点热图网络（含 BoxDreamer 的热图/损失配方） | 🟡 代码就绪，待真实数据验证 |
 | 5 | 在渲染数据上训练（含域随机化与数据增强） | ⬜ 未开始 |
 | 6 | 在目标视频上测试并可视化 | ⬜ 未开始 |
 | 7 | 定量评估与误差分析 | 🟡 指标代码就绪 |
+| 8 | 标定头戴相机内参 K | ⬜ 未开始（**阻塞 PnP 与评估**） |
 
 > 「代码就绪」= 逻辑已实现并有自检用例覆盖，但还没在**真实渲染数据**上跑通。
+> 当前自检规模：**42 个用例**，覆盖几何 / 角点热图 / 网络前向 / 损失 / 配置装配。
 
 ---
 

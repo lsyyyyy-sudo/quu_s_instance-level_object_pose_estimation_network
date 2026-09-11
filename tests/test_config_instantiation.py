@@ -87,6 +87,41 @@ def test_model_group_is_fully_resolved():
     assert _with_config("train.yaml", check)
 
 
+def test_heatmap_style_is_shared_between_model_and_datamodule():
+    """热图风格必须是**同一个源**，否则 GT 和网络输出的量程会对不上。"""
+
+    def check(cfg):
+        assert cfg.heatmap_style == "boxdreamer"
+        assert cfg.model.modules.task.heatmap_style == cfg.heatmap_style
+        assert cfg.datamodule.heatmap_style == cfg.heatmap_style
+        return True
+
+    assert _with_config("train.yaml", check)
+
+
+def test_loss_config_matches_boxdreamer_recipe():
+    """默认损失应是 BoxDreamer 的配方：SmoothL1 粗损失 + λ=2.0 的细损失。"""
+
+    def check(cfg):
+        loss = OmegaConf.to_container(cfg.model.loss, resolve=True)
+        assert loss["heatmap_loss"] == "smooth_l1"
+        assert loss["fine_weight"] == 2.0      # 论文里的 λ
+        assert loss["fine_beta"] == 25.0       # 实测最优的 soft-argmax 温度
+        return True
+
+    assert _with_config("train.yaml", check)
+
+
+def test_task_extraction_settings():
+    def check(cfg):
+        task = OmegaConf.to_container(cfg.model.modules.task, resolve=True)
+        assert task["extraction"] == "topk"    # BoxDreamer 官方做法
+        assert task["topk"] == 20
+        return True
+
+    assert _with_config("train.yaml", check)
+
+
 def test_instantiate_lightning_module_from_config():
     def check(cfg):
         module = _lightning_module(cfg)

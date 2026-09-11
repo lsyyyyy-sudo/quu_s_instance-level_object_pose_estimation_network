@@ -20,7 +20,8 @@ from omegaconf import DictConfig, OmegaConf
 
 from src.models.modules.backbone import build_backbone
 from src.models.modules.decoder import HeatmapDecoder
-from src.models.utils.prediction_utils import predict_corners_and_pose
+from src.models.utils.data_processing import heatmap_value_range
+from src.models.utils.prediction_utils import DEFAULT_TOPK, predict_corners_and_pose
 
 
 class CornerPoseModel(nn.Module):
@@ -53,8 +54,20 @@ class CornerPoseModel(nn.Module):
         self.heatmap_size = int(self.task_cfg.get("heatmap_size", 64))
         self.bbox_representation = str(self.task_cfg.get("bbox_representation", "heatmap"))
         self.corner_order = str(self.task_cfg.get("corner_order", "bb8"))
-        self.extraction = str(self.task_cfg.get("extraction", "soft_argmax"))
+
+        # 热图风格决定取值区间与输出激活方式
+        self.heatmap_style = str(self.task_cfg.get("heatmap_style", "boxdreamer"))
+        if self.heatmap_style not in ("boxdreamer", "centernet"):
+            raise ValueError(
+                f"Unknown heatmap_style: {self.heatmap_style!r} "
+                "(expected 'boxdreamer' or 'centernet')"
+            )
+        self.heatmap_range = heatmap_value_range(self.heatmap_style)
+
+        # 角点提取方式：BoxDreamer 官方用 topk（top-20 平均）
+        self.extraction = str(self.task_cfg.get("extraction", "topk"))
         self.soft_argmax_beta = float(self.task_cfg.get("soft_argmax_beta", 100.0))
+        self.topk = int(self.task_cfg.get("topk", DEFAULT_TOPK))
 
         if self.num_keypoints != 8:
             raise ValueError(
@@ -84,11 +97,21 @@ class CornerPoseModel(nn.Module):
             data: batch dict，至少要有 ``image`` ``[B, 3, H, W]``
         Returns:
             ``{"pred_heatmap": [B, K, h, w], "pred_offset": [B, 2K, h, w] or None}``
+
+        ``pred_heatmap`` 已经做过激活：
+        - ``heatmap_style='boxdreamer'``：``2 * sigmoid(x) - 1``，取值 ``[-1, 1]``
+          （对齐 BoxDreamer 的 ``betr.py``）
+        - ``heatmap_style='centernet'``：保持 logits，交给 focal loss 自己 sigmoid
         """
         image = data["image"] if isinstance(data, dict) else data
         feats = self.encoder(image)
         out = self.decoder(feats)
-        return {"pred_heatmap": out["heatmap"], "pred_offset": out.get("offset")}
+
+        heatmap = out["heatmap"]
+        if self.heatmap_style == "boxdreamer":
+            heatmap = 2.0 * torch.sigmoid(heatmap) - 1.0
+
+        return {"pred_heatmap": heatmap, "pred_offset": out.get("offset")}
 
     # ------------------------------------------------------------------ #
     # 推理
@@ -125,5 +148,7 @@ class CornerPoseModel(nn.Module):
             heatmap_size=self.heatmap_size,
             method=self.extraction,
             beta=self.soft_argmax_beta,
+            k=self.topk,
+            heatmap_range=self.heatmap_range,
             solve_pose=solve_pose,
         )
