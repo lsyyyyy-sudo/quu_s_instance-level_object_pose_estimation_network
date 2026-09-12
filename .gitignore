@@ -74,30 +74,38 @@ htmlcov/
 *.h5
 *.safetensors
 
-checkpoints/
-weights/
-pretrained/
-lightning_logs/
-wandb/
-runs/
-logs/
+# 权重 / 日志目录：同样必须锚定到根目录，否则会误伤任意深度的同名源码目录
+# （见下面「数据集 / 渲染产物」一节的说明和 docs/TROUBLESHOOTING.md 的 GIT-03）
+/checkpoints/
+/weights/
+/pretrained/
+/lightning_logs/
+/wandb/
+/runs/
+/logs/
 *.log
 events.out.tfevents.*
 
 # ============================================================
 #  数据集 / 渲染产物 / 推理输出
 # ============================================================
-data/
-datasets/
-dataset/
+# ⚠️ 这些模式**必须锚定到仓库根目录**（前导 `/`）。
+# 无锚点的 `datasets/` 会匹配**任意深度**的同名目录，
+# 把源码目录 `src/datasets/` 也一起忽略掉——本项目真的踩过这个坑，
+# 导致 src/datasets/ 整个包从来没被提交。详见 docs/TROUBLESHOOTING.md 的 GIT-03。
+/data/
+/datasets/
+/dataset/
+
+# 渲染产物：这两类允许出现在任意深度（它们本来就在 data/ 下面）
 train_pbr/
 test_pbr/
 
-outputs/
-output/
-results/
-vis/
-preds/
+# 训练 / 推理输出（同样锚定到根目录）
+/outputs/
+/output/
+/results/
+/preds/
 
 # ============================================================
 #  编辑器 / 系统

@@ -88,6 +88,7 @@
 ├── requirements.txt / pyproject.toml
 ├── docs/
 │   ├── REFERENCES.md                           # 参考论文 / 代码的阅读索引
+│   ├── DATA.md                                 # 数据放哪、从哪来、许可与收集清单
 │   └── TROUBLESHOOTING.md                      # 踩坑日志：每次运行遇到什么问题、怎么解决的
 └── photo_of_the_project.png
 ```
@@ -163,6 +164,26 @@ git clone --depth 1 https://github.com/WangYuLin-SEU/HCCEPose.git
 ```
 
 阅读顺序建议见 [`docs/REFERENCES.md`](docs/REFERENCES.md)。
+
+### 数据放哪
+
+所有原始数据放在 **`data/`** 目录（整个目录已被 `.gitignore` 忽略）：
+
+```
+data/
+├── raw/{target_video,video_frames,web_views,official,calibration}/
+├── mesh/{generated,reference}/
+├── cc0textures-512/
+└── dji_action4/          # ← BOP 数据集根，渲染脚本的工作目录
+    ├── camera.json       #   必须手写，否则脚本会填 LINEMOD 的默认内参
+    ├── models/{obj_000001.ply, models_info.json}
+    └── train_pbr/        #   渲染产出
+```
+
+**每个目录放什么、数据从哪来、许可是什么、脚本里哪些硬编码要改、收集进度清单，
+全部在 [`docs/DATA.md`](docs/DATA.md)。**
+
+> ⚠️ 仓库是 public，**不要把这些素材提交进来**（版权 + 体积）。文档里只记来源链接。
 
 ---
 

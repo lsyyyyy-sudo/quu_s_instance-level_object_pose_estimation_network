@@ -45,6 +45,9 @@
 | 2026-09-10 | 撤回误提交的题目原文 | 删库重建 + `git push` | ✅ 旧 SHA 已 404（见 `GIT-02`） |
 | 2026-09-10 | 搭 Hydra + Lightning 骨架 | `pytest tests/` | ✅ 42/42 通过 |
 | 2026-09-10 | 端到端冒烟 | `python run.py --config-name=train.yaml` | ⚠️ 按预期停在"数据集不存在"，链路已通 |
+| 2026-09-10 | 对齐 BoxDreamer 的热图/损失配方 | `pytest tests/` | ✅ 42/42 通过；实测修掉 fine_beta 与热图退化两个数值问题（`ALGO-01`、`ALGO-02`） |
+| 2026-09-10 | 建数据目录骨架 + 数据说明文档 | `mkdir data/...` | ✅ 完成；顺带发现 `.gitignore` 吞掉整个 `src/datasets/`（`GIT-03`） |
+| 2026-09-10 | 加仓库卫生检查 | `pytest tests/test_repo_hygiene.py` | ✅ 55/55 通过 |
 | — | 渲染合成数据 | — | ⛔ 阻塞：见 [待解决](#待解决问题) |
 
 ---
@@ -219,6 +222,96 @@
 - **教训**：**"不要提交某个文件"必须在第一次 commit 之前决定。**
   一旦推上去，唯一可靠的补救是删库重建（或 `git filter-repo` 重写全部历史 + force push，
   但对已有 fork 的仓库无效）。**敏感内容先 gitignore，再 git add。**
+
+---
+
+### GIT-03 ⚠️ `.gitignore` 里的无锚点目录模式静默吞掉了整个源码包（重要）
+
+- **时间**：2026-09-10
+- **现象**：改了 `src/datasets/bop_pbr.py` 之后，`git status` **完全看不到这个文件**。
+  进一步查发现：
+
+  ```
+  $ git check-ignore -v src/datasets/bop_pbr.py
+  .gitignore:91:datasets/    src/datasets/bop_pbr.py
+
+  $ git ls-files src          # 输出里没有 src/datasets/ 任何文件
+  ```
+
+  也就是说 **`src/datasets/` 这个包从来没被提交过**。
+  翻回骨架那次提交的文件列表核对，确实缺了它 —— 已经 push 到公开仓库了。
+
+  顺着查下去，**还有第二个受害者**：
+
+  ```
+  $ git check-ignore -v configs/model/vis/default.yaml
+  .gitignore:98:vis/    configs/model/vis/default.yaml
+  ```
+
+  `configs/model/heatmap.yaml` 里有 `- vis: default` 这条 defaults 组合，
+  但那个被引用的配置文件根本没进仓库 → **别人 clone 下来 `python run.py` 会直接因为
+  找不到配置组而报错**。本地一直能跑，只是因为文件在磁盘上还躺着。
+- **原因**：`.gitignore` 里写了两条**无锚点**的模式：
+
+  ```gitignore
+  datasets/          # ← 没有前导 /
+  vis/               # ← 也没有
+  ```
+
+  无前导斜杠的模式会匹配**任意深度**的同名目录，所以 `src/datasets/` 和
+  `configs/model/vis/` 都被匹配。
+  `.gitignore` 是**静默**的：它不会警告"你忽略了源码"，
+  `git status` 也不会列出被忽略的东西，所以这个错误可以潜伏很久。
+
+  同类的高危模式（本次一并排查）：
+
+  | 模式 | 实际误伤 |
+  |---|---|
+  | `datasets/` | `src/datasets/` ← **真的踩了** |
+  | `vis/` | `configs/model/vis/` ← **也真的踩了** |
+  | `data/` | 任何 `*/data/` |
+  | `logs/` `runs/` `weights/` `checkpoints/` | 未来的 `src/logs/` 等 |
+  | `outputs/` `output/` `results/` `preds/` | 同上 |
+
+- **诊断**：用 `git check-ignore` 批量扫一遍工作区里所有源码文件：
+
+  ```powershell
+  # 注意：已跟踪的文件不会被报告，所以这条只揪"未跟踪且被忽略"的
+  git status --ignored --short | Select-String '\.py$'
+  git ls-files src        # 和磁盘上的文件对比
+  ```
+
+- **解法**：凡是"根目录下的数据/输出目录"，模式前面**加 `/` 锚定**：
+
+  ```gitignore
+  /data/
+  /datasets/
+  /dataset/
+  /outputs/
+  /checkpoints/
+  /weights/
+  /logs/
+  ```
+
+  （`train_pbr/`、`test_pbr/` 故意保留无锚点，因为它们本来就嵌在 `data/` 下面。）
+
+- **影响文件**：`.gitignore`、`src/datasets/`、`configs/model/vis/`（后两者补交）
+- **后果**：修复前那个公开仓库 clone 下来 **`python run.py` 跑不起来**
+  （缺 `configs/model/vis/default.yaml`，hydra 的 defaults 组合会失败），
+  而且 `src/datasets` 整个包缺失。
+- **防复发**：新增了 `tests/test_repo_hygiene.py`，4 个用例：
+  1. 扫描所有源码/配置/脚本，用 `git check-ignore --stdin` 检查有没有被忽略的
+  2. 专门盯 `src/datasets/` 这个包
+  3. 静态检查 `.gitignore`，高危目录模式必须带前导 `/`
+  4. 确认扫描本身有效（避免断言退化成"空集合永远通过"）
+
+  用 `git check-ignore` 而不是 `git ls-files` 是关键：**"未跟踪"是临时状态**
+  （刚写的文件本来就还没 add），而**"被忽略"才是真 bug**；
+  `check-ignore` 只报告未跟踪且被忽略的路径，判据正好精确。
+- **教训**：⚠️ **在 `.gitignore` 里写目录名，默认一定要加前导 `/`。**
+  无锚点模式的作用域比你想象的广得多，而且它是静默的 ——
+  最可怕的不是它忽略了东西，而是**你以为它没忽略**。
+  凡是"我以为提交上去了"的时刻，都用 `git ls-files <路径>` 核实一遍。
 
 ---
 
@@ -424,6 +517,9 @@
 | `ALGO-05` | 推理时用 `topk`（BoxDreamer 官方）还是 `soft_argmax`（实测更准） | 最终指标 | 🟡 待有真实训练模型后用验证集实测决定，见 `configs/model/heatmap.yaml` 注释 |
 | `ALGO-06` | fine loss 用 soft-argmax 近似（BoxDreamer 用单独回归头） | 精度上限 | 🟡 若 fine 项收益不明显，再考虑加回归头 |
 | `ENV-04` | 全局 torch 是 CPU 版 | 训练速度 | 🟡 训练前换 CUDA 版 |
+| `DATA-04` | 渲染产物的 RGB 是 `.jpg`（`color_file_format="JPEG"`） | 数据加载 | ✅ 已兼容 `.png`/`.jpg`/`.jpeg` 及大小写变体 |
+| `DATA-05` | `camera.json` 不存在时脚本会填 LINEMOD 默认内参（640×480） | 渲染数据的尺度分布 | 🟡 必须在 `data/dji_action4/camera.json` 手写，见 `docs/DATA.md` §5.2 |
+| `DATA-06` | 渲染脚本相机采样半径 0.3~1.2 m，均值偏大（s/d≈0.094 vs 真实≈0.15） | 透视强度 sim-to-real | 🟡 建议收紧到 0.35~0.6 m，见 `docs/DATA.md` §5.3 |
 
 ---
 
@@ -449,3 +545,9 @@
    查标签里有没有大量**并列值**（会让 topk/argmax 行为随机）。→ `ALGO-02`
 9. **要提交敏感/大文件？**
    **先 gitignore 再 git add**，推上去就晚了。→ `GIT-01`、`GIT-02`
+10. **"我以为提交上去了"？**
+   用 `git ls-files <路径>` **核实**。`.gitignore` 会静默吞文件，
+   `git status` 也看不到被忽略的东西。→ `GIT-03`
+11. **要往 `.gitignore` 里加目录名？**
+   **加前导 `/`**。无锚点模式会匹配任意深度。→ `GIT-03`
+

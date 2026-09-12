@@ -1,0 +1,5 @@
+# 可视化配置（把预测的 8 角点 + 3D 包围盒投影画到图上）
+enable: false
+num_samples: 4          # 每次可视化画几张
+every_n_epochs: 5
+save_dir: ${hydra:runtime.cwd}/outputs/${exp_name}/vis
