@@ -235,15 +235,26 @@ bop_parent_path = os.path.dirname(current_dir)       # -> data/
 bop_dataset_path = os.path.join(bop_parent_path, os.path.basename(current_dir))
 ```
 
-### 5.1 mesh 要求
+### 5.1 mesh 要求（逐条从 BlenderProc 源码核实）
 
-| 项 | 要求 |
-|---|---|
-| 文件 | `models/obj_000001.ply`，**非二进制** PLY |
-| 内容 | 顶点坐标 + **顶点法线**（+ 可选纹理 PNG / 顶点色） |
-| 位置 | **必须居中到原点**（用 `s1_p1_obj_rename_center.py`） |
-| 单位 | **mm**（脚本用 `mm2obj = True` 转成米） |
-| 配套 | `models/models_info.json`（由 `s1_p3_obj_infos.py` 生成） |
+以下结论来自 `blenderproc.zip` 里的实际代码，不是猜的：
+
+| 项 | 要求 | 源码依据 |
+|---|---|---|
+| **文件名** | `models/obj_000001.ply`（6 位补零） | `bop_toolkit_lib/dataset_params.py` L152：`'model_tpath': join(models_path, 'obj_{obj_id:06d}.ply')` —— **扩展名和命名都写死** |
+| **目录** | `<dataset_root>/models/` | 同上 L142：`models_path = join(datasets_path, dataset_name, 'models')` |
+| **必须是文本 PLY** | ⚠️ 不能是二进制 PLY | `loader/ObjectLoader.py` L56 用 `open(filepath, "r", encoding="latin-1")` **当文本读**，还要做字符串替换（L72-73：`property float texture_u` → `property float s`）。二进制 PLY 会直接崩 |
+| **顶点法线 + 顶点坐标** | 要有 | `s1_p1_obj_rename_center.py` 保存时用的是 `save_vertex_normal=True, save_vertex_coord=True, binary=False` |
+| **纹理（方式一）** | PLY 头部写 `comment TextureFile <文件名>`，纹理图与 PLY **同目录** | `ObjectLoader.py` L52/L60-68 |
+| **纹理（方式二）** | 不写 TextureFile → 自动用**顶点色**（`map_vertex_color()`） | `ObjectLoader.py` L83-88 |
+| **配套文件** | `models/models_info.json` 必须存在 —— **物体 id 列表就是从它的 key 来的** | `dataset_params.py` L155 + `BopLoader.py` L53 |
+| **单位** | **mm**（脚本用 `mm2m=True` 转成米） | `s2_p1_gen_pbr_data.py` L185 |
+| **位置** | 居中到原点 | `mesh.py` 无强制要求，但 8 角点/包围盒的对称性依赖它；用 `s1_p1` 处理 |
+
+> 另外 `ObjectLoader.load_obj` 其实也支持 `.obj` / `.fbx` / `.glb` / `.gltf` / `.dae` / `.stl`，
+> 但 **BOP 的模型路径模板把扩展名写死成 `.ply`**，
+> 所以走 `load_bop_objs()` 这条路就必须是 `.ply`。
+> （想用别的格式只能改 BlenderProc 源码或绕过 BOP loader，不建议。）
 
 > `models_info.json` 里的 `min_x/y/z`、`max_x/y/z` **就是我们那 8 个 3D 角点的来源**。
 >
