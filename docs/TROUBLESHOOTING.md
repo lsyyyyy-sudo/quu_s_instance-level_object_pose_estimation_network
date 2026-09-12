@@ -48,6 +48,7 @@
 | 2026-09-10 | 对齐 BoxDreamer 的热图/损失配方 | `pytest tests/` | ✅ 42/42 通过；实测修掉 fine_beta 与热图退化两个数值问题（`ALGO-01`、`ALGO-02`） |
 | 2026-09-10 | 建数据目录骨架 + 数据说明文档 | `mkdir data/...` | ✅ 完成；顺带发现 `.gitignore` 吞掉整个 `src/datasets/`（`GIT-03`） |
 | 2026-09-10 | 加仓库卫生检查 | `pytest tests/test_repo_hygiene.py` | ✅ 55/55 通过 |
+| 2026-09-12 | 云端部署 Hunyuan3D-2（AutoDL 4090） | `finish_all.sh` | 🟡 环境全配好并验证；**形状已跑通**（23.3s / 44.6万顶点），纹理待 GPU 模式 |
 | — | 渲染合成数据 | — | ⛔ 阻塞：见 [待解决](#待解决问题) |
 
 ---
@@ -507,6 +508,187 @@
 
 ---
 
+### ENV-05 ⚠️ GitHub 和 HuggingFace 对代理的要求**相反**（本次最费时的坑）
+
+- **时间**：2026-09-12
+- **现象**：在 AutoDL 上按官方提示 `source /etc/network_turbo` 之后：
+  - 下 HuggingFace 模型慢到 **1.3 MB/s**
+  - 下 GitHub 的东西慢到 **~20 KB/s**（1 GB 的 rembg 模型预计要 14 小时）
+- **诊断**：写了个 15 秒采样的测速脚本对比，**其中一个变体忘了 source**，
+  结果发现规律完全反了：
+
+  | 目标 | 开 turbo | 关 turbo |
+  |---|---:|---:|
+  | HuggingFace（hf-mirror） | 1.3 MB/s | **14 MB/s** |
+  | GitHub | **127 MB/s** | ~20 KB/s |
+
+  AutoDL 的提示其实写了：*"开启加速后对访问其他资源如 pip 源等会**更慢**"*。
+- **解法**：**按目标分别设置**
+
+  ```bash
+  # HuggingFace / pip：关代理
+  unset http_proxy https_proxy
+  export HF_ENDPOINT=https://hf-mirror.com
+
+  # GitHub：开代理
+  source /etc/network_turbo
+  ```
+- **教训**：⚠️ **"开了加速"不等于"全局变快"**。
+  遇到慢先做**分端点测速**，不要假设。测速时也要注意别把代理状态搞混
+  （我那次"忘了 source"反而成了发现真相的契机）。
+
+---
+
+### ENV-06 `hf download` 报 401 Unauthorized（Xet 后端在 hf-mirror 上不可用）
+
+- **时间**：2026-09-12
+- **现象**：
+  ```
+  RuntimeError: Task error: File reconstruction error: CAS Client Error:
+  Request error: HTTP status client error (401 Unauthorized),
+  domain: https://cas-server.xethub.hf.co/v2/reconstructions/...
+  ```
+- **原因**：HuggingFace 新的 **Xet** 存储后端要连 `cas-server.xethub.hf.co`，
+  **hf-mirror 不支持**这个域名，于是 401。
+- **解法**：禁用 Xet，回退到普通 HTTP 下载：
+
+  ```bash
+  export HF_HUB_DISABLE_XET=1
+  ```
+
+- **附带**：Xet 写出的 `.incomplete` 文件普通 HTTP 下载不一定能复用，
+  换后端时先清掉：`find "$HF_HOME" -name '*.incomplete' -delete`
+
+---
+
+### ENV-07 `hf download --include` 只接受**一个**值
+
+- **时间**：2026-09-12
+- **现象**：
+  ```
+  UserWarning: Ignoring `--include` since filenames have been explicitly set.
+  Error: File not found in repository.
+  URL: https://hf-mirror.com/tencent/Hunyuan3D-2/resolve/main/hunyuan3d-delight-v2-0/%2A
+  ```
+- **原因**：`--include` 不是 nargs，**第二个模式被当成了"显式文件名"**，
+  于是 `--include` 被整体忽略，然后去找一个名字就叫 `*` 的文件 → 404。
+- **解法**：**一个模式一条命令**
+
+  ```bash
+  hf download tencent/Hunyuan3D-2 --include "hunyuan3d-paint-v2-0-turbo/*"
+  hf download tencent/Hunyuan3D-2 --include "hunyuan3d-delight-v2-0/*"
+  ```
+- **教训**：CLI 报"忽略某参数"时，先想"是不是我把另一个参数写成了位置参数"。
+
+---
+
+### ENV-08 AutoDL **无卡模式只有 1 个 CPU 核**
+
+- **时间**：2026-09-12
+- **现象**：切到无卡模式后想在 CPU 上做纹理 pipeline 的加载 dry-run，
+  跑到 `Loading pipeline components... 67%` 时连接被掐断（输出 `exit=-1`）。
+- **诊断**：`nproc` → **1**；`free -h` → 内存 1 TB（**不缺内存**）。
+  所以不是 OOM，是**单核太慢**导致进程被中断。
+- **解法**：无卡模式只用来**装环境 + 下文件**；
+  **任何模型加载/推理都必须切回 GPU 模式**。
+- **教训**：省钱模式和可用能力要分清楚。花 30 秒 `nproc` / `free -h`
+  确认资源，比盲目等半小时划算。
+
+---
+
+### CODE-03 本地 `custom_pipeline` 需要 `trust_remote_code=True`
+
+- **时间**：2026-09-12
+- **现象**：
+  ```
+  ValueError: The directory .../hunyuanpaint contains custom code in pipeline.py
+  which must be executed to correctly load the model.
+  Pass `trust_remote_code=True` to allow loading remote code modules.
+  ```
+- **原因**：新版 diffusers 对**本地目录**里的自定义 pipeline 也要求显式声明信任。
+  注意报错说的是"remote code"，但实际是**本地路径**（`custom_pipeline=<本地目录>`），
+  容易看错方向。
+- **解法**：`hy3dgen/texgen/utils/multiview_utils.py` 第 34 行那个
+  `DiffusionPipeline.from_pretrained(...)` 加 `trust_remote_code=True`。
+
+---
+
+### CODE-04 `transformers 5.x` 拒绝加载 `.bin` 权重（CVE-2025-32434）
+
+- **时间**：2026-09-12
+- **现象**：
+  ```
+  ValueError: Due to a serious vulnerability issue in `torch.load`, even with
+  `weights_only=True`, we now require users to upgrade torch to at least v2.6 ...
+  This version restriction does not apply when loading files with safetensors.
+  ```
+- **诊断**：装依赖时没钉版本，`transformers` 装到了 **5.17.0**
+  （仓库是 2025 年初的，对应 4.4x）。而 `hunyuan3d-paint-v2-0-turbo` 的
+  `text_encoder` 和 `vae` **只提供 `.bin`**，没有 safetensors。
+- **两条路都被我否决了**：
+  - 升级 torch 到 2.6 → 可能让**已编译的 CUDA 扩展 ABI 不匹配**（要重编）
+  - 降级 transformers → 会牵动 `huggingface_hub` / `tokenizers` 一串依赖
+- **解法**：**直接转格式**，不动任何依赖
+
+  ```python
+  import torch
+  from safetensors.torch import save_file
+  sd = torch.load(bin_path, map_location="cpu", weights_only=True)  # torch 自己 load 不受限
+  save_file({k: v.contiguous().clone() for k, v in sd.items()
+             if isinstance(v, torch.Tensor)}, safe_path, metadata={"format": "pt"})
+  ```
+
+  命名照约定：CLIP 文本编码器 → `model.safetensors`；
+  扩散组件 → `diffusion_pytorch_model.safetensors`。
+- **教训**：⚠️ **`pip install -r requirements.txt` 里写 `>=` 的包，会装到远超预期的
+  新版本**。这次 `transformers` 从预期的 4.4x 跳到 5.17。
+  复现老仓库时应该**钉住当年的大版本**。
+  另外：这类"格式兼容问题"往往**转换产物**比**改动环境**代价小得多。
+
+---
+
+### PS-04 `pkill -f 'xxx'` 会把自己的 shell 也杀掉
+
+- **时间**：2026-09-12
+- **现象**：远程执行
+  `pkill -f 'curl.*Hunyuan3D'; pkill -f 'git clone'` 之后命令返回 `exit=-1`、**毫无输出**。
+- **原因**：我这条命令是通过 `bash -lc '...'` 跑的，
+  **它自己的命令行里就包含 `git clone` 这个字符串**，
+  于是 `pkill -f` 匹配到了自己，把自己杀了。
+- **解法**：先列 PID 再按 PID 杀，或者让模式不匹配自身：
+
+  ```bash
+  ps -eo pid,cmd | grep -E 'pattern' | grep -v grep | awk '{print $1}' | xargs -r kill -9
+  ```
+- **教训**：`pkill -f` 是**全命令行匹配**，在脚本里很容易自杀。
+  排查"命令莫名 exit=-1 且无输出"时，先怀疑这个。
+
+---
+
+### PS-05 PowerShell 会把 here-string / `$(( ))` / 嵌套引号拆碎
+
+- **时间**：2026-09-12
+- **现象**：反复出现这三类失败：
+  - `@'...'@` 多行 here-string 当参数传给原生命令 → 被按换行**拆成多个参数**
+  - `` `$((b-a)) `` → `b-a : The term 'b-a' is not recognized`
+  - `python -c "...math.cos(x)..."` → 引号被吃掉，Python 收到残缺代码
+- **原因**：PowerShell 到原生程序的参数传递规则和 bash 差太远，转义层级一多就崩。
+- **解法**：**一律落盘成文件**，然后让工具从文件读。
+
+  ```powershell
+  $cmd = @'
+  echo hello
+  a=$((1+2)); echo $a
+  '@
+  $cmd | Out-File -Encoding utf8 "$env:TEMP\x.sh"
+  & $py scripts\remote.py run --file "$env:TEMP\x.sh"
+  ```
+  `scripts/remote.py` 专门为此加了 `--file` 参数。
+- **教训**：⚠️ **跨 shell 传复杂命令，永远走文件**。
+  在 PowerShell 里拼引号是纯粹的浪费时间。
+
+---
+
 ## 待解决问题
 
 | 编号 | 问题 | 阻塞什么 | 状态 |
@@ -520,6 +702,9 @@
 | `DATA-04` | 渲染产物的 RGB 是 `.jpg`（`color_file_format="JPEG"`） | 数据加载 | ✅ 已兼容 `.png`/`.jpg`/`.jpeg` 及大小写变体 |
 | `DATA-05` | `camera.json` 不存在时脚本会填 LINEMOD 默认内参（640×480） | 渲染数据的尺度分布 | 🟡 必须在 `data/dji_action4/camera.json` 手写，见 `docs/DATA.md` §5.2 |
 | `DATA-06` | 渲染脚本相机采样半径 0.3~1.2 m，均值偏大（s/d≈0.094 vs 真实≈0.15） | 透视强度 sim-to-real | 🟡 建议收紧到 0.35~0.6 m，见 `docs/DATA.md` §5.3 |
+| `GEN-01` | 生成的 mesh **厚度偏大 23%**（只有正面+背面两张图） | 包围盒比例 | 🟡 补一张侧面图可改善；`mesh_to_bop.py` 会缩放到官方对角线 |
+| `GEN-02` | 纹理生成尚未跑通（需 GPU 模式） | 外观 sim-to-real | ⏳ 脚本已备好：`finish_all.sh` |
+| `K` | AutoDL 实例**未保存镜像**前，环境不可丢 | 全部云端工作 | 🔴 跑完记得「保存镜像」 |
 
 ---
 

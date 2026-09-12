@@ -39,11 +39,11 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-# 虚拟环境
-.venv/
-venv/
-ENV/
-env/
+# 虚拟环境（本项目用多个隔离环境：训练 .venv、3D 生成 .venv-3d ...）
+/.venv*/
+/venv/
+/ENV/
+/env/
 .env
 .env.*
 !.env.example

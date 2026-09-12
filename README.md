@@ -89,6 +89,7 @@
 ├── docs/
 │   ├── REFERENCES.md                           # 参考论文 / 代码的阅读索引
 │   ├── DATA.md                                 # 数据放哪、从哪来、许可与收集清单
+│   ├── CLOUD_SETUP.md                          # 云端 3D 生成环境（AutoDL）完整可复现记录
 │   └── TROUBLESHOOTING.md                      # 踩坑日志：每次运行遇到什么问题、怎么解决的
 └── photo_of_the_project.png
 ```
