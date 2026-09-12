@@ -101,10 +101,36 @@ def load_mesh(ms, path: Path) -> None:
 def find_texture(ms, mesh_path: Path):
     """找出纹理文件路径；没有则返回 None。
 
+    - .glb/.gltf：纹理**内嵌**在容器里，用 trimesh 抽出来存成 PNG
     - .obj：查同目录同名 .png/.jpg，或解析 .mtl 的 map_Kd
     - .ply：查 PLY 头部的 ``comment TextureFile``
-    - .glb：纹理通常内嵌，pymeshlab/trimesh 转换时会落成外部文件
     """
+    # GLB / GLTF：内嵌纹理，需要抽出来
+    if mesh_path.suffix.lower() in (".glb", ".gltf"):
+        try:
+            import trimesh
+
+            obj = trimesh.load(str(mesh_path), force="mesh")
+            material = getattr(getattr(obj, "visual", None), "material", None)
+            if material is None:
+                print("      ⚠️ glb 里没有 material")
+                return None
+
+            # trimesh 不同版本/不同导入器下，纹理可能挂在 image 或 baseColorTexture
+            img = getattr(material, "image", None) or getattr(material, "baseColorTexture", None)
+            if img is None:
+                print(f"      ⚠️ material({type(material).__name__}) 里没有纹理图，"
+                      f"可用字段: {[a for a in dir(material) if 'image' in a.lower() or 'texture' in a.lower()]}")
+                return None
+
+            out = mesh_path.with_name(mesh_path.stem + "__texture.png")
+            img.convert("RGB").save(out)
+            print(f"      从 {mesh_path.suffix} 抽出内嵌纹理 -> {out.name}  {img.size}")
+            return out
+        except Exception as e:  # noqa: BLE001
+            print(f"      ⚠️ 从 {mesh_path.suffix} 提取纹理失败：{type(e).__name__}: {e}")
+        return None
+
     # PLY 头部
     if mesh_path.suffix.lower() == ".ply":
         head = mesh_path.read_text(encoding="latin-1", errors="ignore")[:4000]
@@ -209,20 +235,31 @@ def convert(
     # ---- 保存 ----
     out_ply = out_dir / f"obj_{obj_id:06d}.ply"
     print(f"[5/6] 保存 {out_ply}")
-    ms.save_current_mesh(
-        str(out_ply),
+    save_kwargs = dict(
         binary=False,              # ★ 必须文本格式
         save_vertex_normal=True,
         save_vertex_coord=True,
         save_wedge_texcoord=False,
         save_vertex_color=not has_texture,
+        save_textures=False,       # ★ 纹理我们自己存（pymeshlab 会因为名字没扩展名而报错）
     )
+    try:
+        ms.save_current_mesh(str(out_ply), **save_kwargs)
+    except TypeError:
+        # 老版本 pymeshlab 没有 save_textures 参数
+        save_kwargs.pop("save_textures", None)
+        ms.save_current_mesh(str(out_ply), **save_kwargs)
 
     # ---- 纹理文件放到 PLY 旁边 + 修正 TextureFile 头 ----
     if has_texture and texture is not None:
-        dst_tex = out_ply.with_suffix(texture.suffix)
+        dst_tex = out_ply.with_suffix(".png")   # BlenderProc 只要同目录 + 头部指对名字
         if texture.resolve() != dst_tex.resolve():
-            shutil.copy2(texture, dst_tex)
+            try:
+                from PIL import Image
+
+                Image.open(texture).convert("RGB").save(dst_tex)
+            except Exception:  # noqa: BLE001
+                shutil.copy2(texture, dst_tex)
         _ensure_texture_file_comment(out_ply, dst_tex.name)
         print(f"      纹理已放到 {dst_tex.name}")
 
@@ -266,24 +303,87 @@ def convert(
         json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     print(f"      摘要 -> obj_{obj_id:06d}_convert_summary.json")
+
+    # ---- models_info.json（BOP 必需；也是我们 8 个 3D 角点的来源）----
+    make_models_info(ml, ms2, out_dir, obj_id, ext2)
     return out_ply
 
 
-def _ensure_texture_file_comment(ply_path: Path, texture_name: str) -> None:
-    """确保 PLY 头部有 ``comment TextureFile <name>``。
+def make_models_info(ml, ms2, out_dir: Path, obj_id: int, extents) -> None:
+    """生成 BOP 的 ``models_info.json``。
 
-    MeshLab 保存 PLY 时不会写这一行，而 BlenderProc 正是靠它找纹理
-    （``ObjectLoader.py`` L52/L60）。所以这里手动补。
+    字段与 HCCEPose 的 ``s1_p3_obj_infos.py`` 一致：
+    ``diameter`` / ``min_*`` / ``max_*`` / ``size_*``。
+
+    ``diameter`` 按 BOP 约定是**模型点之间的最大距离**。
+    对 60 多万个顶点做 O(N²) 不现实，所以在**凸包顶点**上算 ——
+    最大距离一定出现在凸包上，结果等价而快得多。
+    """
+    import numpy as np
+
+    mn = float(np.min(extents))  # 占位，下面用真实 min/max
+    v = ms2.current_mesh().vertex_matrix()
+    vmin, vmax = v.min(axis=0), v.max(axis=0)
+
+    diameter = float(np.linalg.norm(vmax - vmin))
+    try:
+        hull = ml.MeshSet()
+        hull.load_new_mesh(str(out_dir / f"obj_{obj_id:06d}.ply"))
+        hull.generate_convex_hull()
+        hv = hull.current_mesh().vertex_matrix()
+        if len(hv) >= 2:
+            from scipy.spatial.distance import pdist
+
+            diameter = float(pdist(hv).max())
+            print(f"      直径（凸包 {len(hv)} 点）: {diameter:.2f} mm")
+    except Exception as e:  # noqa: BLE001
+        print(f"      ⚠️ 凸包算直径失败（回退用包围盒对角线）: {type(e).__name__}: {e}")
+
+    info = {
+        f"{obj_id}": {
+            "diameter": diameter,
+            "min_x": float(vmin[0]), "min_y": float(vmin[1]), "min_z": float(vmin[2]),
+            "max_x": float(vmax[0]), "max_y": float(vmax[1]), "max_z": float(vmax[2]),
+            "size_x": float(vmax[0] - vmin[0]),
+            "size_y": float(vmax[1] - vmin[1]),
+            "size_z": float(vmax[2] - vmin[2]),
+        }
+    }
+    p = out_dir / "models_info.json"
+    p.write_text(json.dumps(info, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"      models_info.json 已写 -> {p.name}")
+
+
+def _ensure_texture_file_comment(ply_path: Path, texture_name: str) -> None:
+    """确保 PLY 头部有 ``comment TextureFile <texture_name>``，且名字正确。
+
+    BlenderProc 正是靠这一行找纹理（``ObjectLoader.py`` L52/L60）。
+
+    ⚠️ 注意：**不能只在缺失时插入**。MeshLab 保存时会写一个占位名字
+    （实测是 ``texture_0``，因为它拿不到真实文件名），
+    如果不替换掉，BlenderProc 就会去找一个不存在的 ``texture_0`` → 渲染失败。
     """
     text = ply_path.read_text(encoding="latin-1")
+    line = f"comment TextureFile {texture_name}\n"
+
     if "comment TextureFile" in text:
-        return
-    end_header = "end_header"
-    idx = text.find(end_header)
+        # 替换已有那一行（保留其它 comment 不动）
+        new_lines = []
+        replaced = False
+        for raw in text.splitlines(keepends=True):
+            if raw.strip().startswith("comment TextureFile"):
+                new_lines.append(line)
+                replaced = True
+            else:
+                new_lines.append(raw)
+        if replaced:
+            ply_path.write_text("".join(new_lines), encoding="latin-1")
+            return
+
+    idx = text.find("end_header")
     if idx < 0:
         raise RuntimeError(f"{ply_path} 不是合法的 PLY（找不到 end_header）")
-    new_text = text[:idx] + f"comment TextureFile {texture_name}\n" + text[idx:]
-    ply_path.write_text(new_text, encoding="latin-1")
+    ply_path.write_text(text[:idx] + line + text[idx:], encoding="latin-1")
 
 
 # --------------------------------------------------------------------------- #
