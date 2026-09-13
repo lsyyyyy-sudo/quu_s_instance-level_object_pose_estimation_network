@@ -2,8 +2,8 @@
 
 凭据从环境变量读，**不写进代码、不进仓库**：
 
-    AUTODL_HOST   例如 connect.nmb1.seetacloud.com
-    AUTODL_PORT   例如 12894
+    AUTODL_HOST   例如 region-1.example-cloud.com
+    AUTODL_PORT   例如 12345
     AUTODL_USER   例如 root
     AUTODL_PASS   登录密码
 
