@@ -64,6 +64,12 @@
 | 2026-09-14 | 混合：4视图形状 + 2视图纹理 | `run_texture_mv.py --views front back` | ✅ 纹理恢复正常，深色机身 + 屏幕 + `ACTION 4` |
 | 2026-09-14 | GPU 渲染（RTX 4090 / OptiX） | `preview_object.py` 8 视角 800×600 64 采样 | ✅ **127 秒**（无卡模式 CPU 同样参数约 45 分钟，快约 21 倍） |
 | 2026-09-14 | 建 VGGT 重建环境（备用路线） | 权重 9.4 GB | 🟡 环境就绪，未在 GPU 上验证；用户决定先走 Hunyuan3D-2 |
+| 2026-09-14 | 确认物体坐标系（判定 DATA-10） | 沿 ±X/±Y/±Z 正交投影点云 | ✅ 坐标系本就规范：+Z=镜头、+Y=上。`DATA-10` 是虚警 |
+| 2026-09-14 | 验证 `write_bop` 标注 | 1 场景 4 帧 1024×768 | ✅ rgb/depth/mask/mask_visib/scene_gt/scene_camera/scene_gt_info 全部产出 |
+| 2026-09-14 | 掩码多进程 | `BP_NUM_WORKER=4` | ✅ Blender 里 fork + EGL 正常，无崩溃 |
+| 2026-09-14 | 修"一半场景只放 1 个物体" | 改挑选逻辑 | ✅ 每帧 8 实例（`DATA-15`） |
+| 2026-09-14 | 深度缺陷定位 | `len(np.unique(depth))` | 🟡 记录为 `DATA-14`，暂不修（训练不用深度） |
+| 2026-09-14 | **生成正式训练集** | 25 场景 × 20 帧，1024×768，50 采样，10 物体/场景 | ⏳ 运行中（500 张） |
 
 ---
 
@@ -1019,6 +1025,87 @@
 
 ---
 
+### DATA-15 ⚠️ 单模型数据集下，原脚本有一半场景只放 1 个物体
+
+- **时间**：2026-09-14
+- **触发命令**：`gen_pbr_data_demo.py`，`BP_NUM_OBJS=8`
+- **现象**：`scene_gt.json` 每帧只有 **1 个实例**，`mask_visib/` 每帧只有 1 张；
+  但日志明明写着 `loaded 8 object instances`。同一份脚本在 `BP_NUM_OBJS=3` 时是 3 个/帧。
+- **诊断**：
+  1. 先怀疑 BOP writer 的 `ignore_dist_thres=10` 把物体滤掉了 →
+     grep 日志里 `ignored obj` 出现 **0 次**；又单独跑了一次物理模拟，
+     8 个物体模拟后全部落在原点 0.16 m 内，**没有一个是远的**。排除。
+  2. 回去看挑选物体的那段（**原脚本的逻辑**）：
+
+     ```python
+     if rand_s > 0.5:
+         idx_l = np.random.choice(models_ids, size=30, replace=True)
+     else:
+         idx_l = np.random.choice(models_ids, size=min(models_ids.shape[0], 30), replace=False)
+     ```
+
+     我们只有 **1 个模型**，所以 `min(1, 8) = 1` —— **`rand_s <= 0.5` 的那一半场景只放 1 个物体**。
+     `BP_SEED=7` 正好落在这一半，于是 8 帧全是 1 个实例。
+- **原因**：原脚本的 "multi-class object picking mode" 在单模型数据集上退化成"只放 1 个"。
+  它默认数据集里有几十个不同类别，从里面不重复地挑。
+- **解法**：改成"先不重复地取现有模型，再重复铺满到 `num_objs` 个实例"：
+
+  ```python
+  n_distinct = min(models_ids.shape[0], num_objs)
+  chosen = np.random.choice(models_ids, size=n_distinct, replace=False)
+  idx_l = np.tile(chosen, int(np.ceil(num_objs / n_distinct)))[:num_objs]
+  ```
+
+  修改后退化成 1 个的情况消失（实测 3 个场景 × 4 帧全部是 8 个实例/帧）。
+- **影响文件**：`data/render_ws/gen_pbr_data_demo.py`
+- **教训**：
+  - ⚠️ **借用别人的脚本时，要专门检查"在只有 1 个类别的数据集上会怎样"。**
+    `min(n_models, n_objs)` 这种写法的退化行为非常隐蔽：不报错、数量对不上，
+    而且**只在一半的场景里发生**（取决于一个随机分支），很容易当成偶发。
+  - **随机分支要和种子一起看。** 同一份配置换个 seed 就从小数据变成大数据。
+
+---
+
+### DATA-14 ⚠️ 训练数据的 `depth/` 实际不可用（深度被量化成整数米）
+
+- **时间**：2026-09-14
+- **触发命令**：`gen_pbr_data_demo.py`（`BP_WRITE_BOP=1`）
+- **现象**：写出的 `depth/*.png` 是 uint16，但**整张图只有 2~4 个不同值**
+  （`0 / 10000 / 20000 / 30000`，按 `depth_scale=0.1` 换算即 `0/1/2/3 米`），
+  物体在 0.4 m 处的结果直接变成 0。加日志确认：
+
+  ```
+  [render] depth[0]: shape (768, 1024) dtype uint8 min 0.0 max 3.0 unique 4
+  ```
+
+  **`bproc.renderer.render()` 返回的 `data["depth"]` 本身就是 uint8。**
+- **诊断**：
+  - `BopWriterUtility` 的换算是对的：`depth_mm = 1000 * depth; /depth_scale`。
+    问题在上游——`depth` 已经是整数米了。
+  - `enable_depth_output()` 确实设了 `output_file.format.file_format = "OPEN_EXR"`，
+    但**没有设 `color_depth`**。
+  - 读回来走 `load_output_file()` → `BlenderUtility.load_image()`
+    → `imageio.imread(exr)[:, :, :num_channels]`；
+    `trim_redundant_channels()` 只取第 0 通道、**不改类型**（有 docstring 保证）。
+  - 试过在合成器里找 `CompositorNodeOutputFile` 把 `color_depth` 改成 `"32"`，
+    **没匹配到节点**，没生效。
+- **原因**：未完全定位到具体那一行。候选是 EXR 写入时用了 8 位、或
+  `imageio.imread` 对这张 EXR 返回了整型。
+- **解法**：**暂时不修**。理由是：
+  - 我们的网络是 **RGB → 8 角点热图**，不读深度；
+  - BOP 的任何**训练**指标也不消费训练集深度（VSD 用的是**测试集**深度）。
+  如果以后要做 RGB-D（HCCEPose 的 FoundationPose 精化路径）就**必须**修，
+  修的方向：绕开 `render()` 的深度加载 —— 自己挂一个 File Output 节点把 EXR
+  写到可控目录，再用 `OpenEXR`/`imageio` 直接读，或者干脆用 pyrender
+  （mask 那条路径已经在用）按 GT 位姿重算深度。
+- **影响文件**：`data/render_ws/gen_pbr_data_demo.py`（脚本里已写明这段注释）
+- **教训**：**"文件写出来了"不等于"数据是对的"。**
+  BOP 这份数据集里 `rgb/ scene_gt.json scene_camera.json mask_visib/` 全部正确、
+  路径齐全，但 `depth/` 是废的——只有**看数值分布**才发现（`len(np.unique(...))` 一行）。
+  凡是"看起来应该连续"的量（深度、置信度、点图），落盘后都该查一下 unique 数。
+
+---
+
 ### CODE-05 ⚠️ numpy 广播写错一个 `[:, None]`，撑出两个 512³ 数组把进程打成 OOM
 
 - **时间**：2026-09-13
@@ -1073,7 +1160,9 @@
 | `DATA-08` | 渲染出**黑色裂纹**（真因：`preserveboundary=False` 把 38705 个 UV 岛拼的网格**撕开了**，多出 1383 条非流形边） | 外观正确性 | ✅ 已定位并修复：改回 `preserveboundary=True`；用纯灰材质渲染（`BP_FLAT_MATERIAL=1`）一锤定音 |
 | `DATA-12` | 纹理图集 **38.9%（新网格 25.84%）是黑色噪点**，缩小采样会拉偏颜色 | 外观质量 | 🟡 真实但次要；已用 `scripts/repair_texture_atlas.py` 做 padding。根治需重跑纹理生成（要 GPU）或用顶点色 |
 | `DATA-09` | 保纹理简化 `preserveboundary=True` 卡在 40.3% 且无法再降 | 网格规模 | ✅ 已接受 40.3%（358830 面）；用 `--ply-precision 5` 把 PLY 压到 32.89 MB 抵消内存 |
-| `DATA-10` | 生成的 mesh **朝向是任意的**（镜头朝上而非朝前） | BOP 8 角点约定 | 🔴 未处理。阶段① 只做了居中和等比缩放，没有做朝向规范化；这会让角点顺序失去物理意义，需与 psd 确认约定或做 PCA/手工对齐 |
+| `DATA-10` | ~~生成的 mesh 朝向是任意的~~ | BOP 8 角点约定 | ✅ **虚警，已撤销**。实测物体坐标系本来就是规范的、和包围盒对齐的：`+X` = 长轴 69.94 mm、`+Y` = 44.87 mm（上，顶部有录制键）、`+Z` = 33.09 mm（**镜头方向**）。渲染里"躺着"只是刚体掉落的结果，PBR 数据本来就是随机姿态。惯性主轴与坐标轴差 6~8° 是镜头偏心造成的，正常。**约定已写进 [DATA.md](DATA.md)** |
+| `DATA-14` | 训练数据 `depth/` 不可用：深度被量化成整数米（uint8） | RGB-D 路线 | 🟡 **暂不修**（训练不用深度）。根因在 HCCEPose 版 BlenderProc 的 EXR 读写链路，定位记录见 `DATA-14` |
+| `DATA-15` | 单模型数据集下原脚本一半场景只放 1 个物体 | 训练数据量 | ✅ 已修：先不重复取模型再平铺到 `num_objs` 个实例 |
 | `DATA-11` | 无卡模式下只跑了预览参数（480×360 / 32 采样、`BP_WRITE_BOP=0`） | 正式训练数据 | ⏳ 待有 GPU 时用正式配置跑（1024×768 / 50 采样 / `BP_WRITE_BOP=1`），并验证 `scene_gt.json` + `mask_visib` |
 | `ALGO-05` | 推理时用 `topk`（BoxDreamer 官方）还是 `soft_argmax`（实测更准） | 最终指标 | 🟡 待有真实训练模型后用验证集实测决定，见 `configs/model/heatmap.yaml` 注释 |
 | `ALGO-06` | fine loss 用 soft-argmax 近似（BoxDreamer 用单独回归头） | 精度上限 | 🟡 若 fine 项收益不明显，再考虑加回归头 |
