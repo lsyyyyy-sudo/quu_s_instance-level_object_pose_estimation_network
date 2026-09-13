@@ -96,6 +96,7 @@
 │   ├── DATA.md                                 # 数据放哪、从哪来、许可与收集清单
 │   ├── CLOUD_SETUP.md                          # 阶段① 云端 3D 生成环境（AutoDL）完整可复现记录
 │   ├── RENDER_SETUP.md                         # 阶段② BlenderProc 渲染环境（已跑通，含踩坑）
+│   ├── DATASET_v1.md                           # ⭐ v1 训练集存档：造了什么/怎么造/验收/已知缺陷
 │   └── TROUBLESHOOTING.md                      # 踩坑日志：每次运行遇到什么问题、怎么解决的
 └── photo_of_the_project.png
 ```

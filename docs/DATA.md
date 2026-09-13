@@ -313,11 +313,16 @@ bop_dataset_path = os.path.join(bop_parent_path, os.path.basename(current_dir))
 
 ### 5.4 渲染产出
 
+> ✅ **v1 训练集已生成完毕**（2026-09-14，500 帧 / 5000 实例 / 373 MB）。
+> 实际产出、验收结论与已知缺陷见 → [`DATASET_v1.md`](DATASET_v1.md)。
+> 下面这段是**格式说明**（渲染脚本一跑通，数据链路直接接上）。
+
 ```
 data/dji_action4/train_pbr/000000/
-├── rgb/000000.jpg            # 训练图像（注意是 .jpg）
+├── rgb/000000.png            # 训练图像
 ├── depth/000000.png
-├── mask_visib/000000_000001.png
+├── mask/000000_000001.png    # 全部像素
+├── mask_visib/000000_000001.png   # 仅可见像素
 ├── scene_gt.json             # ★ GT 位姿 cam_R_m2c / cam_t_m2c
 ├── scene_camera.json         # ★ 相机内参 cam_K
 └── scene_gt_info.json        # ★ 物体 2D 框 bbox_visib（用于裁剪）
