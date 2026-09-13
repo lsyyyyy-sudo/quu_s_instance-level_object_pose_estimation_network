@@ -251,3 +251,15 @@ images = {"front": img_front, "left": img_left, "back": img_back, "right": img_r
 
 1. **配好后在 AutoDL 控制台「保存镜像」** —— 下次直接开，不用重来这 30+ 分钟
 2. 上传输入图用 JupyterLab 拖拽即可（两张 JPG 各 ~50 KB）
+
+---
+
+## 8. 下一步：阶段② 渲染环境
+
+用 HCCEPose 改造过的 BlenderProc 把 `data/dji_action4/` 渲成 BOP PBR 训练集。
+⚠️ **HCCEPose README 里的 `pip install bpy==3.6.0` 在 AutoDL 上走不通**（`bpy` 没有 cp312
+wheel + `download.blender.org` 被 Cloudflare 挡），改用 **Blender 3.6.0 官方发行包**。
+
+完整步骤、已经就位的东西、以及**当前接续点**见 → [`RENDER_SETUP.md`](RENDER_SETUP.md)。
+踩坑记录见 `TROUBLESHOOTING.md` 的 `ENV-09`～`ENV-11`、`DATA-07`。
+

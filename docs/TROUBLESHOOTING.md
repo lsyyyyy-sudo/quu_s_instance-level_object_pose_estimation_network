@@ -49,7 +49,15 @@
 | 2026-09-10 | 建数据目录骨架 + 数据说明文档 | `mkdir data/...` | ✅ 完成；顺带发现 `.gitignore` 吞掉整个 `src/datasets/`（`GIT-03`） |
 | 2026-09-10 | 加仓库卫生检查 | `pytest tests/test_repo_hygiene.py` | ✅ 55/55 通过 |
 | 2026-09-12 | 云端部署 Hunyuan3D-2（AutoDL 4090） | `finish_all.sh` | 🟡 环境全配好并验证；**形状已跑通**（23.3s / 44.6万顶点），纹理待 GPU 模式 |
-| — | 渲染合成数据 | — | ⛔ 阻塞：见 [待解决](#待解决问题) |
+| 2026-09-12 | 跑通全部第一阶段 3D 生成 | 形状 23.3s / 纹理 1314s | ✅ `shape.glb` + `textured.glb`(26.7 MB) + 2048² 纹理图集 |
+| 2026-09-12 | glb → BOP 格式转换 | `scripts/mesh_to_bop.py` | ✅ `obj_000001.ply`（110 MB ASCII）+ 贴图 + `models_info.json`（对角线 80.88 mm） |
+| 2026-09-12 | UV 抽查（担心贴图映射错） | 读 PLY 第 7/8 列 | ✅ u/v 覆盖 0–0.9996、48 万个不同值，贴图能对上 |
+| 2026-09-13 | 搭 BlenderProc 渲染环境 | 清华 TUNA 下 Blender 3.6.0 + HCCEPose 的 blenderproc 2.5.0 | ✅ 环境装好（`ENV-10` 的 pip 冲突按拆分装解决） |
+| 2026-09-13 | 无卡模式下渲染（无 GPU / 1 核 / 2 GB） | `blender --background --python gen_pbr_data_demo.py` | ⛔→✅ 先被 cgroup 2 GB OOM 杀掉（`ENV-12`），简化网格后跑通 |
+| 2026-09-13 | **渲染出图** | `BP_DEVICE_TYPE=CPU BP_RES=480x360 BP_SAMPLES=32` | ✅ 4 帧，480×360，峰值 851 MiB，4.5 min/帧（单核） |
+| 2026-09-13 | 网格简化 | `mesh_to_bop.py --max-faces 80000` | ✅ 89.1 万面 → 13.4 万面，PLY 110.6 MB → 29.1 MB，导入 80.8 s → 18.6 s |
+| 2026-09-13 | 排查渲染黑条纹 | `uv_splat.py` + 图集掩码统计 | ✅ 定位为图集空白噪声（`DATA-08`），padding 缓解 |
+| — | 完整 BOP 数据集渲染（含 mask/GT） | `BP_WRITE_BOP=1` | ⏳ 待有 GPU 时跑正式配置（1024×768 / 50 采样） |
 
 ---
 
@@ -687,6 +695,334 @@
 - **教训**：⚠️ **跨 shell 传复杂命令，永远走文件**。
   在 PowerShell 里拼引号是纯粹的浪费时间。
 
+### ENV-09 ⚠️ `bpy` 在 AutoDL 上根本装不了（两个独立原因叠在一起）
+
+- **时间**：2026-09-13
+- **触发命令**：`pip install bpy==3.6.0 --extra-index-url https://download.blender.org/pypi/`
+  （HCCEPose README 的原话）
+- **现象**：
+  1. 在镜像自带的 Python 3.12 上：`ERROR: Could not find a version that satisfies the
+     requirement bpy==3.6.0 (from versions: none)`
+  2. 建好 py3.10 conda 环境、加上官方源后**还是同一句**。
+  3. 直接 curl 那个索引页：`http_code=403 size=61375`，正文是 `<title>Just a moment...</title>`，
+     响应头 `cf-mitigated: challenge`、`server: cloudflare`。
+- **诊断**：把"包不存在"和"页面拿不到"区分开——`pip index versions` 的 "from versions: none"
+  在 403 和被 Cloudflare 挡的情况下**长一样**。curl 一看就知道是后者。
+  然后逐个试镜像：`download.blender.org` 直连 403、`source /etc/network_turbo` 后**仍 403**；
+  清华 TUNA `mirrors.tuna.tsinghua.edu.cn/blender/` 返回 200，但目录里**只有
+  `release/ source/ demo/`，没有 `pypi/`**；南大镜像同样；USTC 404。
+  PyPI/阿里云上的 `bpy` 只有 cp311 和 cp313。
+- **原因**：两条互相独立的路都被堵死：
+  ① Blender 官方的 `bpy` wheel 只覆盖到 cp310 / cp311，而 AutoDL 镜像是 py3.12；
+  ② `download.blender.org` 对 AutoDL 的出口 IP 弹 Cloudflare 人机验证，代理也绕不过。
+- **解法**：**放弃 `bpy` pip 模块这条路**，改用 Blender 官方发行包——它自带 Python 3.10，
+  且 `bpy` 在 Blender 进程内天然可导入。从清华 TUNA 下
+  `blender-3.6.0-linux-x64.tar.xz`（256 MB，实测 17.5 MB/s），md5 与官方一致；
+  把 blenderproc 装进它的 `3.6/python/`，用
+  `blender --background --python <脚本>` 运行。
+  这条路能成立的关键是 **HCCEPose 把 `blenderproc/__init__.py` 的 CLI 守卫改成了 `if True:`**，
+  所以 `import blenderproc` 在普通 Python 里就可用。完整步骤见
+  [docs/RENDER_SETUP.md](RENDER_SETUP.md)。
+- **影响文件**：`docs/RENDER_SETUP.md`（新增）
+- **教训**：**"pip 找不到包"先怀疑网络，别先怀疑包名。**
+  `pip index versions` 的报错对 403 / 超时 / 真不存在是一视同仁的，多花 5 秒 curl 一下
+  能看到真相。另外：**PyPI 镜像 ≠ 上游源镜像**，国内镜像站通常只镜像官方"发行版"目录，
+  不会镜像 `pip` 源。
+
+---
+
+### ENV-10 ⛔ `pyrender` 把 `PyOpenGL` 精确钉死在 `==3.1.0`，导致整条 pip 命令解析失败
+
+- **时间**：2026-09-13
+- **触发命令**：把 `"pyrender==0.1.45"` 和 `"PyOpenGL==3.1.7"` 写在**同一条** `pip install` 里
+- **现象**：
+
+  ```
+  The conflict is caused by:
+      The user requested PyOpenGL==3.1.7
+      pyrender 0.1.45 depends on PyOpenGL==3.1.0
+
+  Additionally, some packages in these conflicts have no matching distributions available for your environment:
+      pyopengl
+
+  ERROR: Cannot install PyOpenGL==3.1.7 and pyrender==0.1.45 because these package versions have conflicting dependencies.
+  ERROR: ResolutionImpossible
+  ```
+
+- **诊断**：`pyrender` 最后一次发版是 2021 年，`setup.py` 里写的是
+  `PyOpenGL==3.1.0`（**精确等号**，不是 `>=`），而 3.1.0 只有 sdist、没有 wheel。
+  最后那句 "no matching distributions" 是解析失败后的**副产物**，不是"镜像里没有 PyOpenGL"——
+  pip 其实已经成功下载过 `PyOpenGL-3.1.7-py3-none-any.whl`。
+- **原因**：pyrender 的过度严格的依赖声明 + pip "先整体解析、再安装"的策略。
+- **解法**：**拆成两条命令**，让 pyrender 跳过依赖检查：
+
+  ```bash
+  "$PY" -m pip install "PyOpenGL==3.1.7" "freetype-py==2.5.1" "pyglet==2.1.16"
+  "$PY" -m pip install --no-deps "pyrender==0.1.45"
+  ```
+
+  运行时 PyOpenGL 3.1.7 与 pyrender 0.1.45 兼容，那个 pin 只是当年保守。
+- **影响文件**：`docs/RENDER_SETUP.md` §4.1
+- **教训**：**pip 是先解析后安装的**——`ResolutionImpossible` 意味着**这条命令一个包都没装上**，
+  不要以为前面 "Downloading ..." 过的包已经落盘了。涉及"老包钉死依赖"时，
+  把可疑的那一个拆出来用 `--no-deps` 单独装。
+
+- **⚠️ 为什么不能干脆不要 pyrender**：`write_bop()` 的 GT mask 和 `scene_gt_info.json` 是
+  **用 pyrender 离屏渲染算出来的**（`BopWriterUtility.py` 里 `import pyrender` 全写在函数体内，
+  所以导入期不报错、跑到写标注才炸）。这份 mask 是后面裁图 + 角点监督的输入。
+
+---
+
+### ENV-11 远端 `OMP_NUM_THREADS` 是非法值，Blender 一启动就报 libgomp
+
+- **时间**：2026-09-13
+- **触发命令**：`/root/autodl-tmp/blender-3.6.0-linux-x64/blender --version`
+- **现象**：`libgomp: Invalid value for environment variable OMP_NUM_THREADS`
+- **诊断**：`--version` 明明打出了 `Blender 3.6.0`，所以不是 Blender 的问题；
+  环境变量是镜像预置的，值不是合法整数。
+- **原因**：镜像环境变量污染。
+- **解法**：跑之前 `export OMP_NUM_THREADS=8`（Blender 渲染本身只吃 GPU，
+  这个变量主要给 OIDN 降噪和物理模拟用）。
+- **影响文件**：`docs/RENDER_SETUP.md` §4.4
+- **教训**：镜像预置的环境变量不可信，**第一次跑就把 `export` 写进命令里**，
+  别指望"应该没问题"。
+
+---
+
+### DATA-07 ⚠️ 绕过 blenderproc CLI 直接 `import` 时，`Utility.temp_dir` 是空字符串
+
+- **时间**：2026-09-13
+- **触发命令**：`blender --background --python gen_pbr_data_demo.py`
+- **现象**：还没跑到（预先读源码发现）。
+- **诊断**：`blenderproc/python/utility/Utility.py` 里 `temp_dir = ""`，
+  全仓库只有 `SetupUtility.setup_utility_paths(temp_dir)` 会赋值，
+  而它只被 `command_line.py`（即 `blenderproc` CLI）调用。
+  我们对准的路径是 `import blenderproc` 直接用，**不经过 CLI**。
+  于是 `ObjectLoader.load_obj()` 里这一行会退化：
+
+  ```python
+  tmp_ply_file = os.path.join(Utility.get_temporary_directory(), model_name)
+  # Utility.temp_dir 是 "" -> 结果是相对路径 "obj_000001.ply"
+  ```
+
+  也就是把 BlenderProc **改写过的 110 MB PLY 直接吐进当前工作目录**（cwd = 数据集目录）。
+- **原因**：BlenderProc 默认假定自己由 CLI 启动。
+- **解法**：在适配版脚本里显式设置（可用环境变量覆盖）：
+
+  ```python
+  from blenderproc.python.utility.Utility import Utility
+  temp_dir = os.environ.get("BP_TEMP_DIR") or os.path.join(tempfile.gettempdir(), "bproc_temp")
+  os.makedirs(temp_dir, exist_ok=True)
+  Utility.temp_dir = temp_dir
+  ```
+
+- **影响文件**：`data/render_ws/gen_pbr_data_demo.py`
+- **教训**：**把一个工具当库用时，先找出它"只有 CLI 才会初始化"的全局状态。**
+  这类状态不会报错，只会让路径悄悄退化成相对路径。
+
+### ENV-12 ⚠️ 无卡模式的 cgroup 内存上限只有 2 GB，而且 exit code 被管道吃掉了
+
+- **时间**：2026-09-13
+- **触发命令**：
+  `blender --background --python gen_pbr_data_demo.py 2>&1 | tail -100; echo "exit=$?"`
+- **现象**：日志停在 `load_bop_objs` 中途，**没有任何 traceback**，`echo` 打出来的是 `exit=0`，
+  看起来像是"跑成功了但没产物"。
+- **诊断**：
+  1. 把 `| tail -100` 去掉、改成 `> log 2>&1` 后立刻现形：
+     `bash: line 19: 2649 Killed "$BP/blender" ...`，真实退出码 **137**。
+  2. 查 cgroup：`/sys/fs/cgroup/memory.max = 2147483648`（**2 GB**），
+     `memory.events` 里 **`max 6246`** —— 撞了 6246 次上限。
+     ⚠️ `free -g` 显示的 1 TB 是**宿主机**的，容器里完全不是这么回事。
+  3. 反推内存去向：`ObjectLoader.load_obj()` 处理带纹理 PLY 时把整个文件读成字符串再做
+     **两次 `.replace()`**，110 MB 的 PLY 在导入期间有 **~330 MB 的字符串副本**同时存活，
+     再加上 Blender 的网格数据（89.1 万面）和 8 套 cc0 材质（48 张贴图）。
+- **原因**：容器内存上限远小于网格规模所需。
+- **解法**：给 `scripts/mesh_to_bop.py` 加 `--max-faces`，做保纹理简化。
+  89.1 万面 → **13.4 万面**，PLY **110.6 MB → 29.1 MB**，峰值 RSS 落到 851 MiB。
+- **影响文件**：`scripts/mesh_to_bop.py`、`data/render_ws/gen_pbr_data_demo.py`
+- **教训**：⚠️ **`cmd | tail` 之后再 `echo $?` 拿到的是 `tail` 的退出码。**
+  长任务的输出**永远重定向到文件**再读，否则会得到一个漂亮的假 0。
+  另外：容器里**先看 `/sys/fs/cgroup/memory.max`，别信 `free`**。
+
+---
+
+### ENV-13 `compute_color_from_texture_per_vertex` 报 "Source texture ... doesn't exists"
+
+- **时间**：2026-09-13
+- **触发命令**：pymeshlab 里加载 `.glb` 后调 `ms.compute_color_from_texture_per_vertex()`
+- **现象**：`PyMeshLabException Failed to apply filter ... Source texture
+  "D:/.../texture_0" doesn't exists`
+- **诊断**：pymeshlab 从 GLB 里读出的纹理是**内嵌的**，在 mesh 上只留了个内部名字
+  `texture_0`，磁盘上并没有这个文件；滤镜按**文件路径**去找，自然找不到。
+  （`m.textures()` 返回 `{'texture_0': <Image>}`，说明图确实在内存里。）
+- **原因**：pymeshlab 的纹理滤镜走文件路径，不走内存里的 image。
+- **解法**：绕开这个滤镜——自己用 numpy + PIL 按顶点 UV 采样
+  （见 `data/render_ws/uv_splat.py`），或者干脆改用 `data/render_ws/make_cc0textures.py`
+  那种"凭空造图"的路子。**不**要去改 pymeshlab 的纹理路径。
+- **影响文件**：`data/render_ws/uv_splat.py`
+- **教训**：库的报错说"文件不存在"时，先想清楚**它在找哪个文件**——
+  从容器格式（GLB）读出来的资源经常只存在于内存里。
+
+---
+
+### DATA-08 ⚠️ 渲染出的黑色条纹：一路怀疑纹理，最后发现是**几何被简化撕开了**
+
+- **时间**：2026-09-13
+- **触发命令**：Cycles 渲染 `data/dji_action4/models/obj_000001.ply` + `obj_000001.png`
+- **现象**：物体表面出现**黑色锯齿裂纹**，沿表面拓扑连成片，约覆盖 15~25% 的面积。
+
+- **诊断（四次假设、四次验证，前三次都是错的）**：
+
+  1. **假设一：简化破坏了 UV 缝。** → 用 `scipy.spatial.cKDTree` 量化：简化后顶点 UV 距原始 UV
+     **最大 2.9 px**（2048² 图集），>2 px 的仅 0.6%。**排除**。
+     佐证：`vertices with >1 distinct wedge UV: 0 / 646420`——UV 缝处完全未焊接，
+     wedge→vertex 转换无损。
+
+  2. **假设二：纹理采样本身坏了。** → 写 `data/render_ws/uv_splat.py`：按顶点 UV 从图集取色，
+     做正交投影点云（纯 numpy+PIL，**不需要 Cycles，秒出**）。
+     结果：**模型完全正确**——机身、镜头、屏幕、`ACTION 4K` 字样、红色 DJI 标、磁性卡扣全在。
+     顺带确定了 V 轴约定 `row = (1-v)*H`（翻转过来是纯噪声）。**排除**。
+
+  3. **假设三：图集空白区的噪声被采样到了。** → 光栅化 UV 三角形成掩码：
+     UV 覆盖图集 **61.13%**，剩下 **38.87% 是黑白噪点**（Hunyuan3D-2 把 UV 岛之间的
+     未使用区域填成了噪声）。写了 `scripts/repair_texture_atlas.py` 做标准 texture padding
+     （`distance_transform_edt(return_indices=True)` 最近岛像素填充），
+     空白区高频噪声 3.85% → 1.32%，岛内像素 diff = 0.0。
+     **重渲染 —— 裂纹一模一样。所以这也不是根因。**
+
+  4. **决定性实验：把贴图整个拿掉。** 给 `preview_object.py` 加 `BP_FLAT_MATERIAL=1`，
+     断开 Base Color 的纹理连线、换成纯灰。
+     **裂纹完全一样** → **这是几何问题，和纹理无关。**
+
+  5. **量拓扑**（`ms.get_topological_measures()`）：
+
+     | | 顶点 | 面 | 边界边 | 连通分量 | 非流形边 |
+     |---|---|---|---|---|---|
+     | 原始 | 646420 | 891184 | 394694 | **38705** | 0 |
+     | `preserveboundary=True` | 380243 | 358830 | 394694 | 38705 | 0 |
+     | `preserveboundary=False` | 191975 | 134434 | 196432 | 39704 | **1383** |
+
+     这个网格是 **38705 个 UV 岛拼起来的**（所以 64.6 万顶点里大部分是重复的，
+     焊接的话只需约 44.6 万）。UV 岛的边界本来**严丝合缝地贴在一起**，
+     所以拓扑上"开放"但视觉上密闭。
+     `preserveboundary=False` 允许坍缩边界边 → **各岛的边界各自往里缩 → 岛与岛之间裂开缝**，
+     还制造出 **1383 条非流形边**。从裂缝看进去就是物体内表面 —— 全黑。
+
+- **原因**：`preserveboundary=False` 撕开了 UV 岛拼合而成的网格。
+- **解法**：改回 `preserveboundary=True`（代价是简化下限卡在 40.3%，见 `DATA-09`），
+  并用 `--ply-precision 5` 把文本 PLY 压小（59.91 MB → 32.89 MB）来抵消面数增加带来的内存。
+  图集 padding 保留 —— 它本身是对的（虽然不解决这个问题）。
+- **影响文件**：`scripts/mesh_to_bop.py`、`scripts/repair_texture_atlas.py`、
+  `data/render_ws/preview_object.py`、`data/render_ws/uv_splat.py`
+- **教训**：
+  - ⚠️ **"做减法"之前先确认网格的拓扑结构。** 这个网格有 38705 个连通分量，
+    任何"允许移动边界"的简化都会把它撕碎。**先 `get_topological_measures()` 再选参数。**
+  - ⚠️ **分离变量要彻底。** 我前三次都在"纹理"这个大类里换着法子查，
+    真正一锤定音的是**把纹理整个删掉**这一步——一次渲染，零歧义。
+    当你在同一类原因里换了三种假设都不对时，**下一件事应该是跳出这一类**，而不是换第四种。
+  - 点云 splat 这类**几秒钟的中间表示**极其值钱：它一次就排除了整整一类原因。
+
+---
+
+### DATA-12 生成模型的纹理图集 38.9% 是黑色噪点（真实存在，但不是黑条纹的原因）
+
+- **时间**：2026-09-13
+- **现象**：把网格 UV 三角形光栅化成掩码后统计：**UV 只覆盖图集的 61.13%**
+  （`preserveboundary=True` 的网格是 74.16%），
+  剩下那片空白是**黑白噪点** —— Hunyuan3D-2 的纹理网络把 UV 岛之间的未使用区域填成了噪声。
+- **原因**：生成模型的纹理后处理没有做 texture padding。
+- **解法**：`scripts/repair_texture_atlas.py`，标准 padding 流程：
+  光栅化 UV 掩码 → `scipy.ndimage.distance_transform_edt(~mask, return_indices=True)`
+  给每个空白像素取**最近 UV 岛像素**的颜色 → 只对空白区轻度模糊。
+  实测空白区高频噪声 **3.85% → 1.32%**，**岛内像素 diff = 0.0（一个没动）**。
+- **影响文件**：`scripts/repair_texture_atlas.py`
+- **教训**：这是**真实但次要**的问题——它主要影响缩小采样时的颜色偏移，
+  不是黑裂纹的原因（见 `DATA-08`）。**把它的优先级排对了，才不会在它上面耗掉半天。**
+  根治要么重跑纹理生成（要 GPU），要么改用顶点色（`uv_splat.py` 已证明顶点色是干净的，
+  代价是丢 2048² 细节、文字会糊）。
+
+---
+
+### DATA-09 MeshLab 保纹理简化：`preserveboundary=True` 会把简化卡在 40% 且无法再降
+
+- **时间**：2026-09-13
+- **触发命令**：
+  `ms.meshing_decimation_quadric_edge_collapse_with_texture(targetfacenum=80000, preserveboundary=True, planarquadric=True)`
+- **现象**：891184 面只降到 **358830 面（40.3%）**，离目标 80000 差得远；
+  **重复跑第二遍、第三遍面数一模一样**（`358830 → 358830 → 358830`）。
+- **诊断**：逐组试参数（见下表）。重复跑无效说明不是"一次降不够"，
+  而是有一批边**被硬性拒绝坍缩**。
+- **原因**：网格在 UV 缝处是开放边界（**38705 个连通分量**，见 `DATA-08`），
+  `preserveboundary=True` 拒绝坍缩边界边；加上 `planarquadric=True` 进一步限制，
+  于是卡在 40.3%。
+- **解法**：⚠️ 一开始为了多降 3 倍改成了 `preserveboundary=False`，
+  **结果把网格撕开、渲染出黑裂纹**（`DATA-08` 的决定性实验定位到）。
+  最终**回到 `preserveboundary=True`**，改用 `--ply-precision 5` 压缩文本 PLY 来控制内存。
+  实测矩阵：
+
+  | 参数 | 面数 | 代价 |
+  |---|---|---|
+  | `preserveboundary=True, planarquadric=True` | 358830（40.3%），**重跑无效** | 无（**最终采用**） |
+  | `preserveboundary=False, planarquadric=True` | 177836（20.0%） | 撕开 UV 岛 → 黑裂纹（`DATA-08`） |
+  | `preserveboundary=False, planarquadric=False` | 100955（11.3%） | 同上，更严重 |
+  | 再加 `preservenormal=True` | 134434（15.1%） | 同上 |
+
+  `qualitythr` 在 0.1~1.0 之间对本网格**毫无影响**。
+  事后用 KD 树验证过：简化后顶点 UV 距原始 UV 最大只有 2.9 px，**UV 没被弄坏**。
+
+- **解法**：**采用 `preserveboundary=True`**（`DATA-08` 证明关掉它会撕开网格）。
+  代价是面数只能降到 40.3%（358830 面，PLY 59.91 MB），
+  于是再用 `--ply-precision 5` 把文本 PLY 压到 **32.89 MB** 来抵消内存（`ENV-12`）。
+- **影响文件**：`scripts/mesh_to_bop.py`（`--max-faces`、`--ply-precision`）
+- **教训**：
+  - **"简化没到目标值"时，先试着重复跑一遍**：
+    一模一样 → 是硬性约束挡住了，调参数；逐次下降 → 是迭代次数不够。
+    这一个动作就能把问题分类。
+  - ⚠️ **"降得更多"不等于"更好"。** 关掉 `preserveboundary` 能多降 3 倍，
+    但代价是把网格撕碎——**参数选择必须回到拓扑上去验证**，不能只看面数。
+
+---
+
+### CODE-05 ⚠️ numpy 广播写错一个 `[:, None]`，撑出两个 512³ 数组把进程打成 OOM
+
+- **时间**：2026-09-13
+- **触发命令**：`python /root/autodl-tmp/bp_ws/make_cc0textures.py /root/autodl-tmp/cc0textures-512`
+- **现象**：`bash: line 47: 1477 Killed "$PY" .../make_cc0textures.py`（**exit 137**）。
+  前面 6 个材质都正常，第 7 个（`Marble012`）直接被杀。
+- **诊断**：逐步打印峰值 RSS——前 6 个材质峰值只有 **72 MiB**，第 7 个还没打印就死了。
+  于是范围缩到 `_marble()` 一个函数。
+- **原因**：
+
+  ```python
+  # ❌ 错：[:, None] 加在了整个和上
+  vein = np.abs(np.sin((n * 7.0 + np.linspace(0, 4, h))[:, None] * 2.2))
+  ```
+
+  `n` 是 `(512,512)`，`np.linspace(0,4,h)` 是 `(512,)`，两者相加**沿最后一维广播**仍是
+  `(512,512)`；再 `[:, None]` 就变成 **`(512,1,512)`**——之后的 `sin()` 和 `np.abs()`
+  各产生一个 **1 GiB 的 float64 数组**。2 GB 的 cgroup 直接爆。
+
+- **解法**：把行斜坡**先**变成列向量再参与运算，并加形状断言：
+
+  ```python
+  rows = np.linspace(0.0, 4.0, h)[:, None]          # (h, 1)
+  vein = np.abs(np.sin(n * 7.0 + rows * 2.2))       # (h, w)
+  ```
+
+  同时给每个材质的输出加断言：
+
+  ```python
+  for name, arr, want in (("color", color, (size, size, 3)), ...):
+      if arr.shape != want:
+          raise ValueError(f"{asset}: {name} has shape {arr.shape}, expected {want}")
+  ```
+
+- **影响文件**：`data/render_ws/make_cc0textures.py`
+- **教训**：**数组形状错误不该由 OOM killer 来报。**
+  在"造图/造数据"这类循环里，**每个产物加一句 shape 断言**成本几乎为零，
+  却能把一次 137 变成一行清晰的 `ValueError`。
+  另外 `[:, None]` 要**紧跟在需要变列向量的那个数组**后面，不能图省事写在括号外。
+
 ---
 
 ## 待解决问题
@@ -694,17 +1030,23 @@
 | 编号 | 问题 | 阻塞什么 | 状态 |
 |---|---|---|---|
 | `DATA-01` | **头戴相机内参 K 未知**（视频被 H.264 重编码，元数据已丢） | PnP 无法求解、重投影误差无法计算 | 🔴 需向 psd 索要，或自拍棋盘格标定 |
-| `DATA-02` | 还没有 DJI Action 4 的 3D 模型（BOP 格式 `models_info.json`） | 整个训练管线没有输入 | 🔴 待阶段① |
-| `DATA-03` | BlenderProc 官方流程要求 Ubuntu + EGL，Windows 上大概率跑不通 | 合成数据渲染 | 🔴 需 Linux / 服务器，或换渲染方案 |
+| `DATA-02` | 还没有 DJI Action 4 的 3D 模型（BOP 格式 `models_info.json`） | 整个训练管线没有输入 | ✅ 阶段① 已产出：`shape.glb` + `textured.glb` → `obj_000001.ply/.png/models_info.json` |
+| `DATA-03` | BlenderProc 官方流程要求 Ubuntu + EGL；且 `bpy` pip 模块在 AutoDL 上装不了 | 合成数据渲染 | ✅ **已跑通**：Blender 3.6.0 官方发行包 + HCCEPose 的 blenderproc 2.5.0，无卡模式也出了图 → [docs/RENDER_SETUP.md](RENDER_SETUP.md) |
+| `ENV-12` | 无卡模式 cgroup 内存上限只有 **2 GB**，110 MB 的 PLY 把 Blender OOM 掉 | 渲染环境 | ✅ 已定位；用 `mesh_to_bop.py --max-faces` 简化到 13.4 万面，峰值降到 851 MiB |
+| `DATA-08` | 渲染出**黑色裂纹**（真因：`preserveboundary=False` 把 38705 个 UV 岛拼的网格**撕开了**，多出 1383 条非流形边） | 外观正确性 | ✅ 已定位并修复：改回 `preserveboundary=True`；用纯灰材质渲染（`BP_FLAT_MATERIAL=1`）一锤定音 |
+| `DATA-12` | 纹理图集 **38.9%（新网格 25.84%）是黑色噪点**，缩小采样会拉偏颜色 | 外观质量 | 🟡 真实但次要；已用 `scripts/repair_texture_atlas.py` 做 padding。根治需重跑纹理生成（要 GPU）或用顶点色 |
+| `DATA-09` | 保纹理简化 `preserveboundary=True` 卡在 40.3% 且无法再降 | 网格规模 | ✅ 已接受 40.3%（358830 面）；用 `--ply-precision 5` 把 PLY 压到 32.89 MB 抵消内存 |
+| `DATA-10` | 生成的 mesh **朝向是任意的**（镜头朝上而非朝前） | BOP 8 角点约定 | 🔴 未处理。阶段① 只做了居中和等比缩放，没有做朝向规范化；这会让角点顺序失去物理意义，需与 psd 确认约定或做 PCA/手工对齐 |
+| `DATA-11` | 无卡模式下只跑了预览参数（480×360 / 32 采样、`BP_WRITE_BOP=0`） | 正式训练数据 | ⏳ 待有 GPU 时用正式配置跑（1024×768 / 50 采样 / `BP_WRITE_BOP=1`），并验证 `scene_gt.json` + `mask_visib` |
 | `ALGO-05` | 推理时用 `topk`（BoxDreamer 官方）还是 `soft_argmax`（实测更准） | 最终指标 | 🟡 待有真实训练模型后用验证集实测决定，见 `configs/model/heatmap.yaml` 注释 |
 | `ALGO-06` | fine loss 用 soft-argmax 近似（BoxDreamer 用单独回归头） | 精度上限 | 🟡 若 fine 项收益不明显，再考虑加回归头 |
 | `ENV-04` | 全局 torch 是 CPU 版 | 训练速度 | 🟡 训练前换 CUDA 版 |
 | `DATA-04` | 渲染产物的 RGB 是 `.jpg`（`color_file_format="JPEG"`） | 数据加载 | ✅ 已兼容 `.png`/`.jpg`/`.jpeg` 及大小写变体 |
-| `DATA-05` | `camera.json` 不存在时脚本会填 LINEMOD 默认内参（640×480） | 渲染数据的尺度分布 | 🟡 必须在 `data/dji_action4/camera.json` 手写，见 `docs/DATA.md` §5.2 |
-| `DATA-06` | 渲染脚本相机采样半径 0.3~1.2 m，均值偏大（s/d≈0.094 vs 真实≈0.15） | 透视强度 sim-to-real | 🟡 建议收紧到 0.35~0.6 m，见 `docs/DATA.md` §5.3 |
-| `GEN-01` | 生成的 mesh **厚度偏大 23%**（只有正面+背面两张图） | 包围盒比例 | 🟡 补一张侧面图可改善；`mesh_to_bop.py` 会缩放到官方对角线 |
-| `GEN-02` | 纹理生成尚未跑通（需 GPU 模式） | 外观 sim-to-real | ⏳ 脚本已备好：`finish_all.sh` |
-| `K` | AutoDL 实例**未保存镜像**前，环境不可丢 | 全部云端工作 | 🔴 跑完记得「保存镜像」 |
+| `DATA-05` | `camera.json` 不存在时脚本会填 LINEMOD 默认内参（640×480） | 渲染数据的尺度分布 | ✅ 已手写 `data/render_ws/camera.json`（1024×768，fx=fy=800，depth_scale 0.1）并上传到远端数据集目录 |
+| `DATA-06` | 渲染脚本相机采样半径 0.3~1.2 m，均值偏大（s/d≈0.094 vs 真实≈0.15） | 透视强度 sim-to-real | ✅ 适配脚本默认收紧到 `BP_RADIUS_MIN/MAX = 0.35/0.6`（注意不能再小：脚本自带 0.3 m 的 obstacle-in-view 阈值） |
+| `GEN-01` | 生成的 mesh **厚度偏大约 16%**（只用了正面+背面两张图；三轴包围盒 95%/102%/**116%**，对角线已对齐官方 89.44 mm） | 包围盒比例 | 🟡 补一张侧面图可改善 |
+| `GEN-02` | 纹理生成 | 外观 sim-to-real | ✅ 已跑通（1314 s，`textured.glb` 26.7 MB，2048² 图集） |
+| `K` | AutoDL 实例**未保存镜像**前，环境不可丢 | 全部云端工作 | 🔴 跑完记得「保存镜像」；本次环境在 `/root/autodl-tmp`（关机保留，释放即丢） |
 
 ---
 
@@ -735,4 +1077,37 @@
    `git status` 也看不到被忽略的东西。→ `GIT-03`
 11. **要往 `.gitignore` 里加目录名？**
    **加前导 `/`**。无锚点模式会匹配任意深度。→ `GIT-03`
+12. **`pip` 说"找不到这个包"（`from versions: none`）？**
+   先 `curl -sI` 一下那个源，看是不是 **403 / Cloudflare**。pip 对"被封"和"真没有"报同一句话。
+   另外国内镜像站多半**只镜像发行版目录，不镜像 pip 源**。→ `ENV-09`
+13. **`pip` 报 `ResolutionImpossible`？**
+   这条命令**一个包都没装上**（pip 先整体解析再安装）。把钉死依赖的老包拆出来用
+   `--no-deps` 单独装。→ `ENV-10`
+14. **要在无头 Linux 上渲染/离屏取图？**
+   先确认 EGL 能起来（`/usr/share/glvnd/egl_vendor.d/10_nvidia.json` 在不在、
+   `libEGL.so.1` 装没装），再确认 `OMP_NUM_THREADS` 是合法整数。→ `ENV-11`
+15. **把一个 CLI 工具当库 `import` 用？**
+   先找出它"只有 CLI 才会初始化"的全局状态（路径、临时目录、设备）。
+   这类状态不报错，只会让路径悄悄退化成相对路径。→ `DATA-07`
+16. **长任务"成功"了但没有产物？**
+   `cmd | tail` 之后 `echo $?` 拿到的是 **`tail`** 的退出码。**重定向到文件**再看。
+   容器里先查 `/sys/fs/cgroup/memory.max`，别信 `free`。→ `ENV-12`
+17. **进程被 `Killed`（137）但没有任何 traceback？**
+   先按内存查：cgroup 限额、`memory.events` 的 `max` 计数、以及**产物本身有多大**
+   （这一例是 110 MB 的文本 PLY 在 BlenderProc 里被复制成三份）。→ `ENV-12`
+18. **numpy 报 OOM / 进程莫名被杀？**
+   查**广播**。多写一个 `[:, None]` 就能把 `(512,512)` 变成 `(512,1,512)`，
+   再套一层 `sin` + `abs` 就是两个 GB 级数组。**给每个产物加 shape 断言**。→ `CODE-05`
+19. **渲染出来不对（黑斑/裂纹/糊）？**
+   按 **几何 → 纹理 → 着色/采样率** 三段拆，而且**要真的把某一类整个拿掉**去验证
+   （例如断开纹理连线、换成纯灰材质）。在同一类里换三种假设都不对时，
+   **下一件事是跳出这一类**，不是换第四种。
+   先用**点云 splat**（按 UV 取色后正交投影，纯 numpy，秒出）排除纹理这一类。→ `DATA-08`
+20. **要对网格做简化/降采样？**
+   先 `ms.get_topological_measures()` 看**连通分量、边界边、非流形边**。
+   本例网格是 **38705 个 UV 岛**拼的，任何"允许移动边界"的简化都会把它撕碎。
+   **降得更多 ≠ 更好。** → `DATA-08`、`DATA-09`
+21. **文本格式的模型/数据文件太大？**
+   先想想**读它的程序会不会把整个文件读成字符串**（BlenderProc 就会，还连做两次 `.replace()`）。
+   少写几位有效数字就能省一半内存。→ `ENV-12`
 

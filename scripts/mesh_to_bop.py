@@ -177,6 +177,8 @@ def convert(
     target_dims,
     scale_mode: str,
     texture_relative_to: Path | None,
+    max_faces: int = 0,
+    ply_precision: int = 5,
 ) -> Path:
     ml = _require_pymeshlab()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -190,6 +192,42 @@ def convert(
 
     texture = find_texture(ms, input_path)
     print(f"[2/6] 纹理：{texture.name if texture else '无（将使用顶点色）'}")
+
+    # ---- 可选：保纹理简化 ----
+    # 生成模型动辄 60 万顶点 / 89 万面，对 BOP 训练数据毫无必要，而且代价很实在：
+    # 文本 PLY 会到 100+ MB，BlenderProc 读它时要把整个文件读成字符串再做两次
+    # replace（峰值 ~3 份拷贝），单帧渲染也被拖慢一个量级。
+    # 用保纹理的二次误差边坍缩，UV 会被一起保留。
+    if max_faces and m.face_number() > max_faces:
+        src_faces, src_verts = m.face_number(), m.vertex_number()
+        print(f"[2.5/6] 简化 {src_faces} 面 / {src_verts} 顶点 -> 目标 {max_faces} 面（保纹理）")
+        # ⚠️ 实测（Hunyuan3D-2 的 textured.glb）：这个网格是 **38705 个 UV 岛拼起来的**
+        # （646420 顶点 / 891184 面，边界边 394694 条），UV 缝处完全未焊接。
+        # 因此 `preserveboundary` 必须为 **True**：
+        #   preserveboundary=True  -> 358830 面，边界边 394694（原样保留），非流形边 0
+        #   preserveboundary=False -> 134434 面，边界边 196432，**非流形边 1383**
+        # 后者会让各 UV 岛边界各自坍缩、岛与岛之间裂开缝隙，渲染出来就是沿表面的黑色裂纹
+        # （用纯灰材质、完全不挂贴图渲染，裂纹一模一样，已确认与纹理无关）。
+        # 代价是简化下限被卡在 40.3%，重复跑也不会再降。
+        # qualitythr 在 0.1~1.0 之间对本网格没有影响。
+        # 事后用 KD 树验证：简化后顶点 UV 距原始 UV 最大只有 2.9 px（2048² 图集），UV 没坏。
+        try:
+            ms.meshing_decimation_quadric_edge_collapse_with_texture(
+                targetfacenum=int(max_faces),
+                preserveboundary=True,
+                preservenormal=True,
+                planarquadric=True,
+                extratcoordw=1.0,     # UV 误差也计入二次误差
+            )
+            print("        使用保纹理简化滤波器")
+        except Exception as e:  # noqa: BLE001
+            print(f"        ⚠️ 保纹理简化不可用（{type(e).__name__}: {e}），回退到普通简化")
+            ms.meshing_decimation_quadric_edge_collapse(
+                targetfacenum=int(max_faces), preserveboundary=True, preservenormal=True
+            )
+        m = ms.current_mesh()
+        print(f"        结果：{m.face_number()} 面 / {m.vertex_number()} 顶点"
+              f"（{100.0 * m.face_number() / src_faces:.1f}%）")
 
     # ---- 居中 ----
     mn, mx, ext, diag = _bbox_of(ms)
@@ -249,6 +287,9 @@ def convert(
         # 老版本 pymeshlab 没有 save_textures 参数
         save_kwargs.pop("save_textures", None)
         ms.save_current_mesh(str(out_ply), **save_kwargs)
+
+    if ply_precision:
+        _compact_ply(out_ply, ply_precision)
 
     # ---- 纹理文件放到 PLY 旁边 + 修正 TextureFile 头 ----
     if has_texture and texture is not None:
@@ -354,6 +395,53 @@ def make_models_info(ml, ms2, out_dir: Path, obj_id: int, extents) -> None:
     print(f"      models_info.json 已写 -> {p.name}")
 
 
+def _compact_ply(ply_path: Path, precision: int) -> None:
+    """用更少的有效数字重写 PLY 的顶点块。
+
+    pymeshlab 按 ``double`` 写，每个数 17 位有效数字——一行顶点约 140 字节。
+    本项目在 AutoDL **无卡模式**下渲染，cgroup 内存上限只有 **2 GB**；
+    而 BlenderProc 的 ``ObjectLoader.load_obj()`` 处理带纹理的 PLY 时会
+    **把整个文件读成字符串，再连续做两次 ``.replace()```——导入期间同时存在
+    ~3 份文件大小的字符串。所以**文本 PLY 的字节数直接决定内存峰值**。
+
+    5 位有效数字对毫米级坐标意味着 ~0.001 mm 精度，完全够用，文件却能小一半。
+    """
+    with open(ply_path, "r", encoding="latin-1") as f:
+        header: list[str] = []
+        n_verts = None
+        for line in f:
+            header.append(line)
+            if line.startswith("element vertex"):
+                n_verts = int(line.split()[-1])
+            if line.startswith("end_header"):
+                break
+        if n_verts is None:
+            raise RuntimeError(f"{ply_path} 头部没有 element vertex")
+        body = f.read()
+
+    lines = body.split("\n")
+    v_lines = lines[:n_verts]
+    f_lines = lines[n_verts:]
+
+    import numpy as np
+
+    verts = np.loadtxt(v_lines, dtype=np.float64)
+    if verts.ndim == 1:
+        verts = verts[None, :]
+
+    tmp = ply_path.with_suffix(".compact.tmp")
+    with open(tmp, "w", encoding="latin-1", newline="\n") as out:
+        out.writelines(header)
+        np.savetxt(out, verts, fmt=f"%.{precision}g", delimiter=" ")
+        for ln in f_lines:
+            if ln:
+                out.write(ln + "\n")
+    before = ply_path.stat().st_size
+    tmp.replace(ply_path)
+    after = ply_path.stat().st_size
+    print(f"      PLY 精度压到 {precision} 位有效数字：{before/1e6:.2f} MB -> {after/1e6:.2f} MB")
+
+
 def _ensure_texture_file_comment(ply_path: Path, texture_name: str) -> None:
     """确保 PLY 头部有 ``comment TextureFile <texture_name>``，且名字正确。
 
@@ -397,6 +485,11 @@ def main() -> None:
                     metavar=("L", "W", "H"), help="目标尺寸 (mm)，默认 DJI Action 4 官方值")
     ap.add_argument("--scale-mode", choices=["diagonal", "none"], default="diagonal",
                     help="diagonal=等比例缩放到目标对角线；none=不动尺度")
+    ap.add_argument("--max-faces", type=int, default=0,
+                    help=">0 时先做保纹理简化到不超过该面数（生成模型动辄 89 万面，没必要）")
+    ap.add_argument("--ply-precision", type=int, default=5,
+                    help="文本 PLY 的有效数字位数（默认 5）。文本大小直接决定 BlenderProc "
+                         "导入时的内存峰值；0 = 不压")
     args = ap.parse_args()
 
     if not args.input.is_file():
@@ -410,6 +503,8 @@ def main() -> None:
         target_dims=tuple(args.target_dims),
         scale_mode=args.scale_mode,
         texture_relative_to=args.input.parent,
+        max_faces=args.max_faces,
+        ply_precision=args.ply_precision,
     )
     print("=" * 66)
     print("下一步：把 models/ 交给 HCCEPose 的 s1_p3_obj_infos.py 生成 models_info.json")
