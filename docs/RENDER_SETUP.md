@@ -77,6 +77,89 @@ libxext6 libxi6 libxkbcommon0`。
 
 ## 4. ⏭️ 剩余步骤（从这里接续）
 
+> ### ⚠️ 2026-09-15 更新：**本机 Windows 也能跑，而且搭起来比 Linux 顺**
+>
+> 如果只是想要数据，**不必用 AutoDL 的 GPU 实例**——本地 Windows 机器更快也更便宜。
+> 实测环境（RTX 4060 Laptop 8 GB / 24 物理核 / 31.7 GB RAM）：
+>
+> ```powershell
+> # 1) 下 Blender 3.6.0 Windows（365 MB，blender.org 可达，无需镜像）
+> #    https://download.blender.org/release/Blender3.6/blender-3.6.0-windows-x64.zip
+> #    MD5 044DDB6ABDF5F7D247DBCC06495137DB
+> # 2) 依赖装进 Blender 自带的 python（3.10.12，和 Linux 版同版本）
+> $PY = "<blender>\3.6\python\bin\python.exe"
+> & $PY -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple `
+>     "numpy==1.26.4" "opencv-python==4.9.0.80" "Pillow==10.4.0" "imageio==2.37.2" `
+>     "scipy==1.15.3" "scikit-image==0.24.0" "scikit-learn==1.5.2" "trimesh==4.2.2" `
+>     "matplotlib==3.9.2" "h5py==3.11.0" "rich==13.9.4" "PyYAML==6.0.2" `
+>     "progressbar2==4.5.0" "tqdm==4.67.1" "requests==2.32.3" "pytz==2024.2" `
+>     "pypng==0.20220715.0" "plyfile==1.1"
+> & $PY -m pip install -i <同上> "PyOpenGL==3.1.7" "freetype-py==2.5.1" "pyglet==2.1.16"
+> & $PY -m pip install -i <同上> --no-deps "pyrender==0.1.45"
+> # 3) 把 HCCEPose 的 blenderproc 2.5.0 拷进 site-packages
+> # 4) 跑：<blender>\blender.exe --background --python gen_pbr_data_demo.py
+> ```
+>
+> **为什么 Windows 反而少踩坑**：
+> - `download.blender.org` 直接可下（Linux 那次返回 403 + Cloudflare challenge，只能走 TUNA）
+> - **不需要 EGL** —— `pyrender` 在 Windows 用原生 WGL（走 pyglet），不用装 `libegl`
+> - 31.7 GB 内存，不会像无卡模式那样被 2 GB cgroup 打成 OOM
+> - 那两处 `pyrender`/`PyOpenGL` 的版本冲突，按 §5 的分开装一次就过
+>
+> ### ⚠️ Windows 上**必须** `BP_NUM_WORKER=0`（两个连环坑）
+>
+> **坑 1：`multiprocessing` spawn 会重新导入主脚本**
+>
+> ```
+> File "gen_pbr_data_demo.py", line 41, in <module>
+>     import bpy
+> ModuleNotFoundError: No module named '_bpy'
+> ```
+>
+> Linux 的 `multiprocessing` 用 `fork`（子进程复制父进程，不重新导入）；
+> **Windows 只有 `spawn`，子进程会重新 import 主模块** —— 而子进程是普通 Python、
+> 不在 Blender 内，于是模块级的 `import bpy` 直接失败。
+> 注意光有 `if __name__ == "__main__":` 守卫**还不够**：守卫只保护它后面的代码，
+> 模块级的 import 照样执行。必须把 `bpy` / `blenderproc` 的 import **也挪进守卫里**。
+> （已改：`data/render_ws/gen_pbr_data_demo.py` 文件头有注释说明。）
+>
+> **坑 2：改完还是不行 —— 因为 `blenderproc` 自己也模块级 import bpy**
+>
+> ```
+> File "blenderproc/__init__.py", line 24, in <module>
+>   from .api import loader
+> File "blenderproc/python/loader/AMASSLoader.py", line 10, in <module>
+>     import bpy
+> ModuleNotFoundError: No module named '_bpy'
+> ```
+>
+> 子进程要 unpickle 工作函数就得 import `blenderproc`，而它 import `bpy`。
+> **这是个死结，无法绕过。** 所以 Windows 上 `BP_NUM_WORKER>0` 的 pyrender
+> 进程池**根本用不了**——脚本第 74 行的注释其实早就写了这点。
+>
+> ### 解法：**多进程分片**（`scripts/merge_bop_shards.py`）
+>
+> 既然一个 Blender 进程只能吃一个核（掩码串行），就同时跑 N 个：
+>
+> ```powershell
+> # N 个分片目录，各自 BP_NUM_SCENES 份场景 + 不同 BP_SEED + BP_NUM_WORKER=0
+> # 每个进程的 cwd 指向自己的分片目录，互不干扰
+> # 跑完后合并：
+> python scripts/merge_bop_shards.py --out <merged> <shard0> <shard1> <shard2> <shard3>
+> ```
+>
+> 实测（4 片并行，52 场景 × 20 帧 = 1040 帧）：
+>
+> | | |
+> |---|---|
+> | 单进程 | 约 21 s/帧（含启动摊薄） |
+> | 4 片并行 | GPU 利用率 **84%**，显存 4.3~4.8 GB / 8.2 GB |
+> | 预计总时长 | **约 1.5 小时** |
+>
+> ⚠️ 分片数别开太大：Cycles 每实例约占 1.2 GB 显存，8 GB 的卡最多 5~6 片。
+
+---
+
 ### 4.1 装依赖（**当前卡在这**，见 §5）
 
 ```bash
