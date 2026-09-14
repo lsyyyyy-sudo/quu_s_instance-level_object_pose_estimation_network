@@ -88,6 +88,10 @@
 │   ├── mesh_to_bop.py                          # 生成模型(.glb) -> BlenderProc 能吃的 BOP PLY
 │   │                                           #   --max-faces 保纹理简化 / --ply-precision 压小文本
 │   ├── repair_texture_atlas.py                 # 纹理图集 padding（填掉 UV 岛之间的噪声空白）
+│   ├── verify_bop.py                           # 校验 BOP 标注：3D 框按 GT 位姿投影回 RGB
+│   ├── verify_dataloader.py                    # 校验 dataloader：重投影一致 + 热图峰对准角点
+│   ├── verify_pnp.py                           # 校验位姿分支：GT 角点必须精确还原 GT 位姿
+│   ├── axis_views.py                           # 六向正交投影判物体朝向（详见 docs/DATA.md 5.5）
 │   └── remote.py                               # 云端实例操作（上传/下载/流式执行）
 ├── tests/                                      # 自检用例（不需要数据）
 ├── requirements.txt / pyproject.toml
@@ -97,6 +101,7 @@
 │   ├── CLOUD_SETUP.md                          # 阶段① 云端 3D 生成环境（AutoDL）完整可复现记录
 │   ├── RENDER_SETUP.md                         # 阶段② BlenderProc 渲染环境（已跑通，含踩坑）
 │   ├── DATASET_v1.md                           # ⭐ v1 训练集存档：造了什么/怎么造/验收/已知缺陷
+│   ├── TRAINING.md                             # ⭐ 阶段③④：网络、集成验证结论、怎么跑
 │   └── TROUBLESHOOTING.md                      # 踩坑日志：每次运行遇到什么问题、怎么解决的
 └── photo_of_the_project.png
 ```

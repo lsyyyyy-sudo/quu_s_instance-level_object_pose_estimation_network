@@ -72,6 +72,10 @@
 | 2026-09-14 | **生成正式训练集** | 25 场景 × 20 帧，1024×768，50 采样，10 物体/场景 | ✅ **完成**：500 帧 / 5000 实例 / 5000 掩码 / 373 MB（96 分钟） |
 | 2026-09-14 | 数据集验收 | 完整性 + 旋转矩阵正交性 + 分布统计 | ✅ 结构全过（`det≈1`、`max\|RRᵀ−I\|=8.5e-7`）；⚠️ 查出**遮挡严重不足**（`DATA-16`） |
 | 2026-09-14 | 归档 | 远端打包 373 MB 并下载到本地（含 SHA256） | ✅ `data/bop/dji_action4_hybrid_dataset.tar.gz` |
+| 2026-09-14 | **阶段③④：数据→网络集成验证**（无卡模式，本地 CPU） | `scripts/verify_{bop,dataloader,pnp}.py` | ✅ 四条全过：标注投影吻合、热图峰**0 格**误差、PnP GT 往返 `rot<0.04°`、训练循环跑通 |
+| 2026-09-14 | 训练循环冒烟 | `run.py` 2 epoch / CPU | ✅ 12.0M 参数、loss 正常、验证循环与 checkpoint 保存都通 |
+| 2026-09-14 | **小样本过拟合 sanity test** | 64 样本 / 320 步 / CPU | ✅ **tr_loss 56.5→8.8**，`pck@0.15` 0.195→0.461，`pose_valid_ratio=1.00` |
+| — | GPU 正式训练 | `python run.py --config-name=train.yaml` | ⏳ 待有卡；5000 样本 / 256px / 500 epoch |
 
 ---
 
@@ -1141,6 +1145,76 @@
     **都要在训练集里统计 X 的分布**，而不是假设它会自然出现。
   - 这条也解释了为什么对比 BoxDreamer 有意义：它渲干净单体 + **训练时在线合成遮挡**，
     遮挡强度是可控参数；我们把 clutter 烘进渲染，一旦物理把它们摊平，就**没有回头路**。
+
+---
+
+### PS-06 ⚠️ PowerShell 把子进程的 stderr 当异常，长任务报"退出码 1"但其实是 0
+
+- **时间**：2026-09-14
+- **触发命令**：`python run.py --config-name=train.yaml ... | Select-Object -Last 40`
+- **现象**：训练明明跑完、日志最后一行是 `[INFO] All done. Exiting.`、没有任何 traceback，
+  但工具报 `[exit code: 1]`。
+- **诊断**：把输出重定向到文件（不经管道、不经 `Select-*`）后取 `$LASTEXITCODE`：
+
+  ```powershell
+  & python run.py ... *> $log
+  Write-Host "真实退出码 = $LASTEXITCODE"      # -> 0
+  ```
+
+  日志里确实有 `NativeCommandError`，但它在 `CategoryInfo` 那一行——
+  是 **PowerShell 对 stderr 的包装**，不是程序抛的异常。
+  Lightning 的 `Seed set to 42`、git 的进度条都会走 stderr。
+- **原因**：PowerShell 的原生命令输出处理：子进程只要往 stderr 写东西，
+  在 `2>&1` 或管道场景下就会被包装成 `RemoteException`，
+  且**管道的退出码会变成下游 cmdlet 的**（和 `cmd | tail` 是同一类坑，见 `ENV-12`）。
+- **解法**：判长任务只看**产物 + 日志内容**；要拿真实退出码就**重定向到文件**再读 `$LASTEXITCODE`。
+- **影响文件**：所有 PowerShell 调用点
+- **教训**：这是本项目**第二次**踩同一类坑（第一次是 bash 的 `cmd | tail`，记在 `ENV-12`）。
+  **"退出码"在管道里是不可信的**，两个 shell 都会骗你。
+
+---
+
+### ENV-14 Hydra struct 模式下，往已有配置组里加**新键**必须写 `+`
+
+- **时间**：2026-09-14
+- **触发命令**：
+  `python run.py --config-name=train.yaml trainer.limit_train_batches=2`
+- **现象**：
+  ```
+  omegaconf.errors.ConfigAttributeError: Key 'limit_train_batches' is not in struct
+  full_key: trainer.limit_train_batches
+  hydra.errors.ConfigCompositionException: Could not override 'trainer.limit_train_batches'.
+  To append to your config use +trainer.limit_train_batches=2
+  ```
+- **原因**：`configs/trainer/default.yaml` 里**没有** `limit_train_batches` 这个键；
+  Hydra 默认 struct 模式不允许凭空加键。
+- **解法**：加 `+` 前缀 —— `+trainer.limit_train_batches=2`。
+  **覆盖已存在的键**（如 `trainer.max_epochs=1`）不用 `+`。
+- **影响文件**：所有命令行 override
+- **教训**：报错信息最后一行 Hydra 已经把答案写出来了（`use +trainer.xxx=2`）。
+  **Hydra 的报错值得读到最后一行。**
+
+---
+
+### CODE-06 ⚠️ 验证脚本自己的检查公式写错，报出一个假问题
+
+- **时间**：2026-09-14
+- **现象**：`scripts/verify_dataloader.py` 报
+  `✗ #4165 热图峰值偏离角点 4.2px (>stride 4.0)`，看起来像数据有问题。
+- **诊断**：去读 GT 热图的**实际实现**（`src/models/utils/data_processing.py`）：
+  `centers = corner_2d * ratio`，热图在**整数网格**上取值，所以峰值格 = `round(centers)`。
+  而我的检查用的是 `peak_cell * stride + (stride-1)/2` —— **凭空多加了 1.5 px**。
+  最大真误差应是 `√2 × stride/2 ≈ 2.83 px`，加上这 1.5 px 正好 4.3 px，和报出的 4.2 吻合。
+- **原因**：**验证脚本自己引入了偏移**，不是数据的问题。
+- **解法**：直接比**整数格子索引**：
+  `expected = round(corner_2d * ratio)`，`peak = argmax`，要求 `|peak - expected| ≤ 1 格`。
+  改完误差 **0 格**，全部通过。
+- **影响文件**：`scripts/verify_dataloader.py`
+- **教训**：
+  - ⚠️ **写验证脚本时，检查公式必须来自被测代码的实现，不能凭直觉。**
+    "图像坐标 → 热图坐标" 差半个格子的偏移极难靠肉眼发现，却会让整张检查表失去意义。
+  - **报错时先怀疑检查器。** 尤其是"差一点点就过"的那种失败（4.2 vs 阈值 4.0）——
+    真 bug 通常差得远，差一点点的往往是自己的容差/公式有问题。
 
 ---
 
