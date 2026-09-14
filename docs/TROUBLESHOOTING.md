@@ -1264,7 +1264,7 @@
 
 | 编号 | 问题 | 阻塞什么 | 状态 |
 |---|---|---|---|
-| `DATA-01` | **头戴相机内参 K 未知**（视频被 H.264 重编码，元数据已丢） | PnP 无法求解、重投影误差无法计算 | 🔴 需向 psd 索要，或自拍棋盘格标定 |
+| `DATA-01` | 头戴相机内参 K 未知（视频被 H.264 重编码，元数据已丢） | ~~PnP 无法求解、重投影误差无法计算~~ | 🟢 **对项目目标不构成阻塞**（2026-09-14 修正）。psd 明确：**本项目不需要内参**。核对代码确认：网络本体（`CornerPoseModel.forward`）只有 `image → encoder → decoder → heatmap`，损失只吃 `pred_heatmap`/GT `heatmap`/`corner_2d`，**都不消费 K**；`crop_and_resize` 的裁剪只看 bbox。K 只出现在可选的 `predict(solve_pose=True) → cv2.solvePnP` 与其位姿指标里，已把 `configs/model/metrics/default.yaml` 的 `solve_pose` 默认改为 `false`。**对照**：BoxDreamer 把 K 当网络输入（构造 camera rays），所以它必须标定 |
 | `DATA-02` | 还没有 DJI Action 4 的 3D 模型（BOP 格式 `models_info.json`） | 整个训练管线没有输入 | ✅ **v2 已产出**：4 视图生成，三轴 99%/102%/101%（官方尺寸），319668 面 → `data/dji_action4_hybrid/models/`。旧 2 视图版留在 `data/dji_action4_2view/` 对照 |
 | `DATA-13` | 多视图生成时**形状和纹理的最优输入不同**：¾ 侧视能让形状变准、却会把纹理投糊 | 外观质量 | ✅ 已定位；解法=形状用 4 视图、纹理用 front/back 两张 |
 | `DATA-03` | BlenderProc 官方流程要求 Ubuntu + EGL；且 `bpy` pip 模块在 AutoDL 上装不了 | 合成数据渲染 | ✅ **已跑通**：Blender 3.6.0 官方发行包 + HCCEPose 的 blenderproc 2.5.0，无卡模式也出了图 → [docs/RENDER_SETUP.md](RENDER_SETUP.md) |

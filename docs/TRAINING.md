@@ -177,4 +177,28 @@ python run.py --config-name=test.yaml mode=test            # 测试
 | **GPU 正式训练** | 本次只在 CPU 上做了冒烟与过拟合（32 核 / 31.7 GB）。正式训练需要 GPU。 |
 | **`DATA-16` 遮挡不足** | 训练集里 95% 实例完全可见，HCCEPose 的遮挡鲁棒能力学不到。见 [DATASET_v1.md](DATASET_v1.md) |
 | **`DATA-17` 有效分辨率** | 裁完 256×256 有 1.5~2.4× 上采样 |
-| **阶段⑤** | 在 `head_left_rgb_raw.mp4` 上测试。**还卡在 `DATA-01`：头戴相机内参 K 未知**（PnP 要用，没有它连评估都做不了） |
+| **阶段⑤** | 在 `head_left_rgb_raw.mp4` 上测试。**不需要相机内参**（见下）。 |
+
+### 5.1 关于相机内参 K：本项目不需要
+
+网络本体（`CornerPoseModel.forward`）只有 `image → encoder → decoder → heatmap`，
+损失只吃 `pred_heatmap` / GT `heatmap` / `corner_2d` —— **都不消费 K**。
+`crop_and_resize` 的裁剪也只看 bbox，K 的更新结果只喂给 PnP。
+
+K 唯一出现的地方是可选的位姿后处理：
+
+```
+predict_corners_and_pose(..., K, solve_pose=True)
+    └─ recover_pose_from_bb8 ─▶ cv2.solvePnP ─▶ 6D 位姿
+         └─ 指标 add / rot_err_deg / trans_err_mm / acc_5cm5deg
+```
+
+所以 `configs/model/metrics/default.yaml` 的 **`solve_pose` 默认为 `false`** ——
+验证阶段只报 2D 角点指标（`corner_err_px` / `pck@t`），不依赖真实相机的 K。
+需要 6D 位姿（可视化或对照）时再手动打开。
+
+**对照 BoxDreamer**：它把 K 当作**网络输入**（`BoxDreamerModel.forward` 里
+`K = data["non_ndc_intrinsics"]` → `_prepare_camera_representation` 构造 camera rays），
+评测时还用 K 跑 PnP（`process_prediction` 的 bb8 分支），2D 投影误差指标也用 K
+（唯一不用 K 的是 ADD —— 有趣的是 `process_single_bs_add` 里读了 `K` 却从没用过，是段死代码）。
+**所以它必须标定，我们这条路线结构上不需要。**

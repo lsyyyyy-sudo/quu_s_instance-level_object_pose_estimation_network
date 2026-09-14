@@ -8,4 +8,15 @@ add_symmetric: false        # 目标物体是否旋转对称。DJI Action 4 非�
 pose_unit_scale: 1.0        # 3D 模型单位 -> mm 的换算系数（渲染数据为 mm 时填 1.0）
 
 # 是否用 PnP 从预测角点解位姿（否则只评估 2D 角点误差）
-solve_pose: true
+#
+# ⚠️ 本项目的交付物是 **2D 的 8 个角点**，不是 6D 位姿，所以默认关闭。
+#    网络本体（CornerPoseModel.forward）和损失都不消费相机内参 K：
+#      forward 只有 image -> encoder -> decoder -> heatmap
+#      损失只吃 pred_heatmap / GT heatmap / corner_2d
+#    K 只在这条可选后处理链上用得到：
+#      predict_corners_and_pose(..., K, solve_pose=True) -> recover_pose_from_bb8 -> cv2.solvePnP
+#      以及由此产生的 add / rot_err_deg / trans_err_mm / acc_5cm5deg 指标
+#    打开它需要真实的相机内参（本项目的头戴相机 K 未知，见 docs/TROUBLESHOOTING.md 的 DATA-01）。
+#    对照：BoxDreamer 把 K 当**网络输入**（构造 camera rays），所以它必须标定；
+#          我们这条路线结构上就不需要。
+solve_pose: false
