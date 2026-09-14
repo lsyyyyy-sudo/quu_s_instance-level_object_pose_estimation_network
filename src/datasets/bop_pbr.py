@@ -171,6 +171,8 @@ class BOPPBRDataset(Dataset):
         aug_noise_std: float = 0.02,
         aug_random_crop_jitter: float = 0.1,
         max_samples: Optional[int] = None,
+        min_px_visib: int = 64,
+        min_visib_fract: float = 0.10,
     ):
         super().__init__()
         self.dataset_root = dataset_root
@@ -187,6 +189,12 @@ class BOPPBRDataset(Dataset):
         self.aug_blur_prob = float(aug_blur_prob)
         self.aug_noise_std = float(aug_noise_std)
         self.aug_random_crop_jitter = float(aug_random_crop_jitter)
+        # 可见性过滤：完全（或几乎完全）被挡住的实例不能用。
+        # 裁剪按 bbox_visib 做，像素可见数为 0 时那个框是退化的（0 大小），
+        # 裁出来是一块无关的背景，却配着一个"正确"的角点标签 —— 纯噪声。
+        # 料箱堆叠之后这类实例占比很高（实测 25%），必须滤掉。
+        self.min_px_visib = int(min_px_visib)
+        self.min_visib_fract = float(min_visib_fract)
 
         models_info_path = os.path.join(dataset_root, "models", "models_info.json")
         if not os.path.isfile(models_info_path):
@@ -220,6 +228,7 @@ class BOPPBRDataset(Dataset):
             raise FileNotFoundError(f"Split directory not found: {split_dir}")
 
         samples: List[Tuple[str, int, int]] = []
+        n_skip_px = n_skip_frac = 0
         for scene_name in sorted(os.listdir(split_dir)):
             scene_dir = os.path.join(split_dir, scene_name)
             gt_path = os.path.join(scene_dir, "scene_gt.json")
@@ -227,10 +236,26 @@ class BOPPBRDataset(Dataset):
                 continue
             with open(gt_path, "r", encoding="utf-8") as f:
                 scene_gt = json.load(f)
+            # scene_gt_info.json 里的 px_count_visib / visib_fract 用来做可见性过滤
+            scene_gti = self._load_scene_json(scene_dir, "scene_gt_info.json")
             for frame_id, annotations in scene_gt.items():
+                frame_info = scene_gti.get(str(frame_id), [])
                 for gt_idx, ann in enumerate(annotations):
-                    if int(ann["obj_id"]) in self.obj_ids:
-                        samples.append((scene_dir, int(frame_id), gt_idx))
+                    if int(ann["obj_id"]) not in self.obj_ids:
+                        continue
+                    if 0 <= gt_idx < len(frame_info):
+                        info = frame_info[gt_idx]
+                        if int(info.get("px_count_visib", 1 << 30)) < self.min_px_visib:
+                            n_skip_px += 1
+                            continue
+                        if float(info.get("visib_fract", 1.0)) < self.min_visib_fract:
+                            n_skip_frac += 1
+                            continue
+                    samples.append((scene_dir, int(frame_id), gt_idx))
+        if n_skip_px or n_skip_frac:
+            print(f"[bop_pbr] 可见性过滤：丢掉 {n_skip_px} 个 px_count_visib<{self.min_px_visib}"
+                  f"、{n_skip_frac} 个 visib_fract<{self.min_visib_fract}，"
+                  f"保留 {len(samples)} 个样本")
         return samples
 
     def _load_scene_json(self, scene_dir: str, name: str) -> dict:

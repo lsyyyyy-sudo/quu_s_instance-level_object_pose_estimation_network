@@ -37,3 +37,11 @@ aug_random_crop_jitter: 0.1
 max_train_samples: null
 max_val_samples: 512
 shuffle_train: true
+
+# 可见性过滤（⚠️ 重要）
+# 裁剪是按 bbox_visib 做的。实例如果几乎/完全被挡住，那个框会退化成 0 大小，
+# 裁出来是一块无关背景却配着"正确"的角点标签 —— 纯噪声样本。
+# 料箱堆叠后这类实例占比很高（实测 25%），必须滤掉。
+# 判据来自 scene_gt_info.json 的 px_count_visib / visib_fract。
+min_px_visib: 64        # 可见像素数下限
+min_visib_fract: 0.10   # 可见面积占比下限
