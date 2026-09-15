@@ -45,3 +45,19 @@ shuffle_train: true
 # 判据来自 scene_gt_info.json 的 px_count_visib / visib_fract。
 min_px_visib: 64        # 可见像素数下限
 min_visib_fract: 0.10   # 可见面积占比下限
+
+# ============================================================
+#  BoxDreamer 式训练时增强（**打的是我们实测出的两个失败模式**）
+# ============================================================
+# 为什么需要（见 docs/RESULTS.md）：
+#   · 遮挡：完全可见样本角点失败率 0.79%，严重遮挡样本 45.0%（差 57 倍）
+#   · 跨域：合成数据中位误差 1.44 px，真实视频上角点明显跑偏
+# 而训练集里几乎没遮挡（95% 完全可见）、也没有真实相机的光度特性。
+# 参数与 refs/BoxDreamer/configs/datamodule/local.yaml 对齐。
+#
+# 目标物体 bbox 内被"挖掉"的比例区间；null = 关闭
+obj_mask_ratio: [0.0, 0.4]
+# 把一个**兄弟实例**贴到目标上的概率（模拟物体互相遮挡）
+obj_paste_prob: 0.4
+# 光度增强：'dark' 模拟暗光，'mobile' 模拟手机相机（运动模糊/色彩抖动/ISO 噪声）
+rgb_augmethods: ['dark', 'mobile']

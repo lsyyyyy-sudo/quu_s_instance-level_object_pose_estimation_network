@@ -45,6 +45,9 @@ class CornerPoseDataModule(pl.LightningDataModule):
         seed: int = 42,
         min_px_visib: int = 64,
         min_visib_fract: float = 0.10,
+        obj_mask_ratio: Optional[Sequence[float]] = None,
+        obj_paste_prob: float = 0.0,
+        rgb_augmethods: Optional[Sequence[str]] = None,
     ):
         super().__init__()
         self.save_hyperparameters(logger=False)
@@ -78,6 +81,10 @@ class CornerPoseDataModule(pl.LightningDataModule):
             aug_random_crop_jitter=float(aug_random_crop_jitter),
             min_px_visib=int(min_px_visib),
             min_visib_fract=float(min_visib_fract),
+            obj_mask_ratio=None if obj_mask_ratio is None else list(obj_mask_ratio),
+            obj_paste_prob=float(obj_paste_prob),
+            rgb_augmethods=None if rgb_augmethods is None else list(rgb_augmethods),
+            aug_seed=int(seed),
         )
         self._max_train_samples = max_train_samples
         self._max_val_samples = max_val_samples
