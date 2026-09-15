@@ -228,7 +228,11 @@ class PL_CornerPose(pl.LightningModule):
     # ------------------------------------------------------------------ #
     def load_pretrained_params(self, path: str) -> None:
         """从 Lightning checkpoint 里取出网络权重（去掉 ``model.`` 前缀）。"""
-        ckpt = torch.load(path, map_location="cpu")
+        # ⚠️ 必须显式 weights_only=False：torch>=2.6 把 torch.load 的默认值翻成了 True，
+        # 而 Lightning checkpoint 里除了权重还存了 hyper_parameters（含 OmegaConf 对象），
+        # 默认值会直接报 "Unsupported global: omegaconf.listconfig.ListConfig"。
+        # 这个 checkpoint 是我们自己训练产出的，可信。
+        ckpt = torch.load(path, map_location="cpu", weights_only=False)
         state = ckpt.get("state_dict", ckpt)
 
         prefix = "model."

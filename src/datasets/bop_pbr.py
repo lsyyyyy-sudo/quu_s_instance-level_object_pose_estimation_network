@@ -349,6 +349,16 @@ class BOPPBRDataset(Dataset):
             style=self.heatmap_style,
         )[0]
 
+        # ---- 可见性（评估时按遮挡程度分层用）----
+        # 训练不需要它，但评估时必须能回答"误差是不是集中在被遮挡的样本上"，
+        # 这是 DATA-16（训练集缺遮挡）假设的直接检验。
+        _info = None
+        _entries = scene_gt_info.get(str(frame_id), []) if scene_gt_info else []
+        if gt_idx < len(_entries):
+            _info = _entries[gt_idx]
+        visib_fract = float(_info.get("visib_fract", 1.0)) if _info else 1.0
+        px_count_visib = int(_info.get("px_count_visib", -1)) if _info else -1
+
         return {
             "image": image_t,                 # [3, H, W]
             "cam_K": K_t,                     # [3, 3]
@@ -359,6 +369,8 @@ class BOPPBRDataset(Dataset):
             "obj_id": torch.tensor(obj_id, dtype=torch.long),
             "frame_id": torch.tensor(frame_id, dtype=torch.long),
             "image_path": image_path,
+            "visib_fract": torch.tensor(visib_fract, dtype=torch.float32),
+            "px_count_visib": torch.tensor(px_count_visib, dtype=torch.long),
         }
 
     # ------------------------------------------------------------------ #

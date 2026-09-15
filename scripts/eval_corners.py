@@ -102,6 +102,7 @@ def main(cfg: DictConfig) -> None:
     errs_px = []                          # 每个角点的像素误差
     errs_norm = []                        # 归一化误差
     ious = []
+    visib = []                            # 每个角点所属样本的 visib_fract
     n_samples = 0
     panels = []
     max_panels = int(os.environ.get("EVAL_PANELS", "8"))
@@ -129,6 +130,8 @@ def main(cfg: DictConfig) -> None:
             per_corner_n += d.shape[0]
             errs_px.append(d.reshape(-1))
             errs_norm.append(dn.reshape(-1))
+            if "visib_fract" in batch:
+                visib.append(np.repeat(batch["visib_fract"].cpu().numpy(), K))
             n_samples += d.shape[0]
 
             for b in range(pred.shape[0]):
@@ -165,8 +168,14 @@ def main(cfg: DictConfig) -> None:
           f"p90 {pct(dn_all,90):7.4f}  p95 {pct(dn_all,95):7.4f}")
     print()
     print("【PCK】误差 < t×对角线 的角点占比")
-    for t in (0.02, 0.05, 0.10, 0.15, 0.20):
+    ts = (0.02, 0.05, 0.10, 0.15, 0.20)
+    for t in ts:
         print(f"  PCK@{t:<5} {100*np.mean(dn_all < t):6.2f}%")
+    # AUC：把 PCK 曲线在 [0, t_max] 上积分再除以 t_max，汇总成一个数（越大越好，参考 BOP 的 AUC）
+    grid = np.linspace(0.0, 0.20, 201)
+    pck_curve = np.array([float(np.mean(dn_all < g)) for g in grid])
+    auc = float(np.trapz(pck_curve, grid) / 0.20)
+    print(f"  --> PCK-AUC(0~0.20) = {auc:.4f}   （越大越好；随机预测约 0）")
     print()
     print("【失败率】")
     for t in (0.05, 0.10, 0.20):
@@ -183,6 +192,24 @@ def main(cfg: DictConfig) -> None:
     print("【框 IoU】预测 8 点外接框 vs GT 8 点外接框")
     print(f"  mean {ious.mean():.4f}  median {np.median(ious):.4f}  "
           f"min {ious.min():.4f}  (<0.5 的样本 {100*np.mean(ious<0.5):.2f}%)")
+
+    # ---- 按遮挡程度分层（检验 DATA-16 假设：误差是否集中在被遮挡的样本上）----
+    if visib:
+        v = np.concatenate(visib)
+        print()
+        print("【按 visib_fract 分层】这一栏直接检验「训练集缺遮挡 -> 遮挡处崩」的假设")
+        print(f"  {'bin':>12} {'角点数':>7} {'占比':>7} {'中位误差':>10} {'p90':>9} "
+              f"{'失败率>0.1':>11}")
+        bins = [(0.0, 0.5, "0.0~0.5"), (0.5, 0.8, "0.5~0.8"),
+                (0.8, 0.95, "0.8~0.95"), (0.95, 1.01, "0.95~1.0")]
+        for lo, hi, lab in bins:
+            m = (v >= lo) & (v < hi)
+            if m.sum() == 0:
+                continue
+            sub = dn_all[m]
+            print(f"  {lab:>12} {int(m.sum()):>7} {100*m.mean():>6.1f}% "
+                  f"{np.median(sub):>10.4f} {np.percentile(sub,90):>9.4f} "
+                  f"{100*np.mean(sub > 0.1):>10.2f}%")
     print("=" * 74)
 
     if panels:
