@@ -46,6 +46,7 @@ class CornerPoseDataModule(pl.LightningDataModule):
         min_px_visib: int = 64,
         min_visib_fract: float = 0.10,
         obj_mask_ratio: Optional[Sequence[float]] = None,
+        crop_use_bbox_obj: bool = False,
         obj_paste_prob: float = 0.0,
         rgb_augmethods: Optional[Sequence[str]] = None,
     ):
@@ -82,6 +83,7 @@ class CornerPoseDataModule(pl.LightningDataModule):
             min_px_visib=int(min_px_visib),
             min_visib_fract=float(min_visib_fract),
             obj_mask_ratio=None if obj_mask_ratio is None else list(obj_mask_ratio),
+            crop_use_bbox_obj=bool(crop_use_bbox_obj),
             obj_paste_prob=float(obj_paste_prob),
             rgb_augmethods=None if rgb_augmethods is None else list(rgb_augmethods),
             aug_seed=int(seed),

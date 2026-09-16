@@ -179,6 +179,7 @@ class BOPPBRDataset(Dataset):
         min_px_visib: int = 64,
         min_visib_fract: float = 0.10,
         obj_mask_ratio: Optional[Sequence[float]] = None,
+        crop_use_bbox_obj: bool = False,
         obj_paste_prob: float = 0.0,
         rgb_augmethods: Optional[Sequence[str]] = None,
         aug_seed: int = 0,
@@ -210,8 +211,12 @@ class BOPPBRDataset(Dataset):
         # （完全可见只有 0.79%）；且没有真实相机的光度特性。详见
         # src/datasets/utils/aug_boxdreamer.py 的模块文档。
         self.obj_mask_ratio = (
-            None if obj_mask_ratio is None else (float(obj_mask_ratio[0]), float(obj_mask_ratio[1]))
+            None if obj_mask_ratio is None
+            else (float(obj_mask_ratio[0]), float(obj_mask_ratio[1]))
         )
+        # 裁剪用 bbox_obj（amodal 全物体框）还是 bbox_visib（可见部分框）。
+        # 默认 False 保持v1 的历史行为；开启它才和 amodal 角点标签语义一致。
+        self.crop_use_bbox_obj = bool(crop_use_bbox_obj)
         self.obj_paste_prob = float(obj_paste_prob)
         self.rgb_augmethods = list(rgb_augmethods) if rgb_augmethods else []
         # 每个 worker 进程用自己的 rng，避免所有 worker 抽到同一串随机数
@@ -427,7 +432,17 @@ class BOPPBRDataset(Dataset):
                 info = entries[gt_idx]
 
         if info is not None:
-            for key in ("bbox_visib", "bbox_obj"):
+            # ⚠️ 用哪个框裁剪，是个**必须和标签语义一致**的选择。
+            # 标签是 3D 盒 8 个角点的投影（**amodal**，含被挡住的部分），
+            # 所以按道理该用 bbox_obj（全物体框）。用 bbox_visib（可见部分框）
+            # 在物体被严重遮挡时会退化：框偏移、变小、甚至部分跑到画面外
+            # （实测 v2 有 bbox_visib=[-512, 0, 78, 39] 的样本），
+            # 裁出来是无关背景，标签却还是这个物体的角点 —— 纯噪声样本。
+            # v1 侥幸没暴露：它 95.3% 的实例 bbox_visib == bbox_obj；
+            # v2 加料箱造遮挡后这个潜伏 bug 立刻引爆（见 docs/RESULTS.md）。
+            order = ("bbox_obj", "bbox_visib") if self.crop_use_bbox_obj \
+                else ("bbox_visib", "bbox_obj")
+            for key in order:
                 if key in info and info[key] is not None:
                     bbox = np.array(info[key], dtype=np.float64)
                     if bbox[2] > 1 and bbox[3] > 1:
