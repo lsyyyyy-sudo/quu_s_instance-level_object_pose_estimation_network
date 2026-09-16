@@ -133,9 +133,18 @@ def make_heatmap_target(
             for k in range(K):
                 cx = float(centers[b, k, 0].clamp(0, heatmap_size - 1))
                 cy = float(centers[b, k, 1].clamp(0, heatmap_size - 1))
-                heatmap[b, k] = gaussian_2d(
+                g = gaussian_2d(
                     heatmap_size, cx, cy, sigma=sigma, device=corner_2d.device
                 )
+                # ⚠️ **必须把峰值归一到恰好 1.0**：``focal_loss`` 的正样本判据是
+                #    ``gt >= 1.0``，而角点中心是浮点数（例如 37.3），最近的格子
+                #    距离不为 0，未归一化的峰值只有 0.98x -> **正样本数为 0**
+                #    -> focal 只剩负样本项 -> 网络被训成"哪里都没有角点"。
+                #    实测：centernet 峰值 0.983、>=1.0 的格子数 0，
+                #    训练指标直接卡在 123 px（详见 docs/RESULTS.md）。
+                #    这也是 BoxDreamer 的 ``make_bbox_features`` 末尾要做峰值归一化的原因。
+                g = g / g.max().clamp(min=1e-6)
+                heatmap[b, k] = g
         return heatmap
 
     raise ValueError(
