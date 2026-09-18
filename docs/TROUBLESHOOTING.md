@@ -1741,6 +1741,82 @@ paste 到图上）。它同样只有单类别渲染，靠 paste 造遮挡。我�
 
 ---
 
+### DATA-21 · PLY 用非标准 UV 属性名，Blender 静默丢掉 UV
+
+**现象**：把 BOP 的 `obj_000001.ply` 导进 Blender 渲染，出来是**一片纯白**，
+没有任何纹理。查材质：`原材质数 = 0  UV 层 = []`。
+
+**原因**：我们的 PLY 是 VCGLIB 生成的，UV 属性名是**非标准的**
+```
+comment TextureFile obj_000001.png
+property float texture_u          <-- 不是标准的 s / t / u / v
+property float texture_v
+```
+**Blender 的 PLY 导入器认不出，直接忽略，不报错。**
+（trimesh 能正确解析：UV 覆盖 [0,1]，只有 2.5% 的顶点是零）
+
+**修法**：先用 trimesh 转成 OBJ/GLB 再导入（`data/render_ws/ply_to_glb.py`）。
+
+**教训**：**"渲染出来没有纹理"要先查 UV 层存不存在**，不要先怀疑贴图路径。
+导入器丢掉属性是静默的。
+
+---
+
+### DATA-22 · Blender 的 OBJ/GLTF 导入器默认 Y-up，会换掉机身坐标轴
+
+**现象**：转成 GLB 再导入后，bbox 从 `Y[-22.43,22.43] Z[-16.55,16.55]`
+变成 `Y[-16.55,16.55] Z[-22.43,22.43]` —— **机身的 Y(高 44.87) 和 Z(深 33.09) 被换掉了**。
+OBJ 也一样。
+
+**原因**：OBJ/GLTF 约定是 Y-up，Blender 是 Z-up，导入器自动做转换。
+
+**修法**：显式指定 `bpy.ops.wm.obj_import(filepath=..., forward_axis="Y", up_axis="Z")`。
+
+**教训**：**导入后第一件事是核对 bbox**。轴被换掉之后，
+"在 +Z 面贴平面"会贴到错误的面上，而且**看起来像是位置算错了**，极难反查。
+
+---
+
+### CODE-08 · `matrix_parent_inverse` 抵消父级缩放，平面大了 1000 倍
+
+**现象**：给物体挂屏幕平面（父级带 `mm2m` 的 0.001 缩放），
+平面的世界尺寸报 **60200 × 36900 mm**，期望 60.2 × 36.9 —— **正好 1000 倍**。
+
+**原因**：父级时写了
+```python
+pl.parent = parent
+pl.matrix_parent_inverse = parent_mw.inverted()     # <-- 错
+```
+Blender 的 `child.matrix_world = parent.matrix_world @ matrix_parent_inverse @ matrix_basis`。
+把 `matrix_parent_inverse` 设成父级矩阵的逆，等于**把父级变换整个抵消**，
+平面就退化成"用局部单位直接当世界单位"。
+
+**修法**：**只设 `parent`，不要碰 `matrix_parent_inverse`**（保持单位阵）。
+这样局部坐标(mm) 会被父级正确地缩放成米。
+
+**教训**：Blender 里"保持世界变换"和"在父级局部空间里定位"是**两种相反的需求**，
+UI 的 Set Parent 做的是前者，程序里赋 `.parent` 做的是后者。**别把 UI 的行为带进代码。**
+
+---
+
+### CODE-09 · BlenderProc 跑在 Blender 内嵌 Python 里，**没有 torch**
+
+**现象**：渲染脚本里 `from src.datasets.utils.screen_content import ...`
+直接 `ModuleNotFoundError: No module named 'torch'`。
+
+**原因**：这条 import 会先执行 `src/datasets/__init__.py`，
+而它 import 了 `bop_pbr.py`，后者需要 torch。
+**BlenderProc 用的是 Blender 自带的 Python，没有 torch。**
+
+**修法**：**按文件路径加载**，绕开整条包导入链：
+```python
+spec = importlib.util.spec_from_file_location("screen_content", "<abs path>.py")
+mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+```
+
+**教训**：**渲染脚本里任何 `src.*` 包导入都是雷**。
+渲染进程和训练进程是两套 Python 环境，**只有纯 numpy/cv2 的模块能共享**。
+
 ## 待解决问题
 
 | 编号 | 问题 | 阻塞什么 | 状态 |
