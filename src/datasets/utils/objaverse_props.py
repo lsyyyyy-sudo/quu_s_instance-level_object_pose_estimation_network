@@ -44,22 +44,51 @@ def load_keep_list(path: str) -> list[str]:
     return [p for p in d if isinstance(p, str) and os.path.isfile(p)]
 
 
+def _is_mesh(o) -> bool:
+    """这个 BlenderProc MeshObject 还活着、且真的带 mesh 数据吗。"""
+    try:
+        bo = getattr(o, "blender_obj", None)
+        return bo is not None and getattr(bo, "data", None) is not None
+    except Exception:
+        return False
+
+
 def _join(objs):
-    """把一个 GLB 里的多个 mesh 合成一个。"""
+    """把一个 GLB 的多个 mesh 合成一个。
+
+    ⚠️ 踩过的坑：``bproc.object.join_objects_many_list(objs)`` 返回的包装对象
+    **可能是悬空引用** —— join 会删掉被合并的 object，返回值的 ``.blender_obj.data``
+    变成 None，后面读顶点就报
+        AttributeError: 'NoneType' object has no attribute 'vertices'
+    所以这里直接用 raw bpy 的 ``object.join()``，它把选中对象并进 active，
+    active 的包装对象仍然有效。
+    """
+    objs = [o for o in objs if _is_mesh(o)]
+    if not objs:
+        return None
     if len(objs) == 1:
         return objs[0]
     try:
-        import blenderproc as bproc
-        return bproc.object.join_objects_many_list(objs)
-    except Exception:
-        # 退路：直接用 bpy 把除第一个以外都删掉（保底能跑）
-        keep = objs[0]
-        for o in objs[1:]:
+        bos = [o.blender_obj for o in objs]
+        bpy.ops.object.select_all(action="DESELECT")
+        for b in bos:
+            b.select_set(True)
+        bpy.context.view_layer.objects.active = bos[0]
+        bpy.ops.object.join()
+        bpy.context.view_layer.update()
+        return objs[0] if _is_mesh(objs[0]) else next((o for o in objs if _is_mesh(o)), None)
+    except Exception as e:
+        # 退路：保住顶点最多的那一个（会丢部件，但至少不崩）
+        print(f"[props] join 失败（{type(e).__name__}: {e}），改用最大子网格")
+        best, bn = None, -1
+        for o in objs:
             try:
-                o.blender_obj.select_set(True)
+                n = len(o.blender_obj.data.vertices)
             except Exception:
-                pass
-        return keep
+                continue
+            if n > bn:
+                best, bn = o, n
+        return best
 
 
 def _world_extent(obj) -> np.ndarray:
@@ -82,8 +111,10 @@ def _world_extent(obj) -> np.ndarray:
         parts = [obj]
     for o in parts:
         try:
-            bo = getattr(o, "blender_obj", o)
-            me = bo.data
+            bo = getattr(o, "blender_obj", None)
+            me = getattr(bo, "data", None) if bo is not None else None
+            if me is None:
+                continue
             n = len(me.vertices)
             if n == 0:
                 continue
@@ -164,12 +195,16 @@ def add_objaverse_props(keep_path: str, rng: np.random.Generator,
             continue
         try:
             o = _join(objs)
+            if o is None or not _is_mesh(o):
+                fail += 1
+                print(f"{log_prefix} 跳过 {os.path.basename(p)}: join 后没有可用的 mesh"
+                      f"（载入 {len(objs)} 个对象）")
+                continue
             o.set_name(f"prop_{k:02d}_{os.path.basename(p)[:8]}")
             longest = _normalize_size(o, size_min, size_max, rng)
             if longest < 0:
                 fail += 1
-                print(f"{log_prefix} 跳过 {os.path.basename(p)}: 包围盒退化"
-                      f"（顶点数 {len(getattr(o.blender_obj, 'data').vertices) if hasattr(o, 'blender_obj') else '?'}）")
+                print(f"{log_prefix} 跳过 {os.path.basename(p)}: 包围盒退化")
                 continue
             sizes.append(longest)
             o.set_rotation_euler(bproc.sampler.uniformSO3())
