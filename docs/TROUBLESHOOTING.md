@@ -1817,6 +1817,48 @@ mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
 **教训**：**渲染脚本里任何 `src.*` 包导入都是雷**。
 渲染进程和训练进程是两套 Python 环境，**只有纯 numpy/cv2 的模块能共享**。
 
+### DATA-23 · `get_bound_box()` 刚导入时返回全 0 —— 尺寸归一化静默失败
+
+**现象**：加了 `0/6` 个 Objaverse 物体，日志里只有一行汇总，
+**没有任何失败原因**，查了半天。
+
+**原因**：刚 `import` 完的 GLTF 物体，BlenderProc 的 `obj.get_bound_box()`
+返回**全 0**（depsgraph 还没评估）。而我把 `cur <= 1e-9` 当成"尺寸非法"跳过 ——
+于是 6 个全被静默丢掉。
+
+**修法**：
+- 改从 **mesh 顶点直接算世界包围盒**（大网格子采样到 ~4000 点，避免慢）
+- **每个失败分支都打印原因** —— 这次的教训就是"静默失败最贵"
+
+**教训**：**「全 0 的包围盒」是 Blender 里非常常见的坑。**
+凡是 import 之后立刻读几何量的地方，要么先 `bpy.context.view_layer.update()`，
+要么干脆从顶点自己算。**别信刚导入对象的缓存几何量。**
+
+---
+
+### CODE-10 · `join_objects_many_list()` 返回悬空引用
+
+**现象**：处理 8 个物体全部失败：
+```
+AttributeError: 'NoneType' object has no attribute 'vertices'
+```
+
+**原因**：`bproc.object.join_objects_many_list(objs)` 返回的包装对象可能是
+**悬空引用** —— join 会**删掉**被合并的 object，返回值的 `.blender_obj.data`
+变成 `None`，后面读顶点就崩。
+（而 GLTF 导入常常产生**一个父 EMPTY + 多个 mesh 子对象**的结构，
+正好会走到 join 这条路径。）
+
+**修法**：
+- 改用 **raw bpy**：`select_all(DESELECT)` → 逐个 `select_set(True)` →
+  `active = bos[0]` → `bpy.ops.object.join()`。**active 的包装对象仍然有效**
+- 加 `_is_mesh()` 防御检查（`.blender_obj` 存在**且** `.data` 非 None）
+- join 失败时退路是"保住顶点最多的子网格"（会丢部件，但不崩）
+- 每个失败分支打印原因
+
+**教训**：**BlenderProc 里凡是"会删除对象"的 API（join / merge / delete），
+返回值的有效性都必须验证**，不能假设它指向的还是活的 object。
+
 ## 待解决问题
 
 | 编号 | 问题 | 阻塞什么 | 状态 |
