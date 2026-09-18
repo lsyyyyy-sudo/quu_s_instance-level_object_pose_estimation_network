@@ -62,20 +62,62 @@ def _join(objs):
         return keep
 
 
-def _normalize_size(obj, target_min: float, target_max: float, rng) -> float:
-    """把物体的最长边缩放到 [target_min, target_max]（米）。返回缩放后的最长边。"""
+def _world_extent(obj) -> np.ndarray:
+    """算物体的世界坐标包围盒尺寸（米）。
+
+    ⚠️ 为什么不用 ``obj.get_bound_box()``：实测刚 import 完的 GLTF 物体，
+    它返回**全 0**（depsgraph 还没评估）。这会让"尺寸归一化"静默失败 ——
+    6 个物体全被判成"尺寸非法"而跳过，而且日志里只有一行汇总，很难查。
+
+    所以这里直接从 mesh 顶点算（大网格做子采样，避免慢）。
+    """
     try:
-        bb = np.array(obj.get_bound_box())
-        ext = bb.max(axis=0) - bb.min(axis=0)
-        cur = float(np.max(ext))
+        bpy.context.view_layer.update()
     except Exception:
-        return -1.0
-    if cur <= 1e-9:
+        pass
+    bnds = []
+    try:
+        parts = obj if isinstance(obj, (list, tuple)) else [obj]
+    except Exception:
+        parts = [obj]
+    for o in parts:
+        try:
+            bo = getattr(o, "blender_obj", o)
+            me = bo.data
+            n = len(me.vertices)
+            if n == 0:
+                continue
+            step = max(1, n // 4000)          # 子采样上限 ~4000 点
+            mw = bo.matrix_world
+            idx = range(0, n, step)
+            vs = np.array([mw @ me.vertices[i].co for i in idx], dtype=np.float64)
+            bnds.append((vs.min(axis=0), vs.max(axis=0)))
+        except Exception:
+            continue
+    if not bnds:
+        return np.zeros(3)
+    lo = np.min([b[0] for b in bnds], axis=0)
+    hi = np.max([b[1] for b in bnds], axis=0)
+    return hi - lo
+
+
+def _normalize_size(obj, target_min: float, target_max: float, rng) -> float:
+    """把物体的最长边缩放到 [target_min, target_max]（米）。返回缩放后的最长边。
+
+    失败返回 -1.0（调用方会记一次 fail 并打印）。
+    """
+    ext = _world_extent(obj)
+    cur = float(np.max(ext)) if ext.size else 0.0
+    if not np.isfinite(cur) or cur <= 1e-9:
         return -1.0
     # 在目标区间里随机挑一个尺寸再等比缩放 —— 让大小也有多样性
     want = float(rng.uniform(target_min, target_max))
     s = want / cur
     obj.set_scale([s, s, s])
+    try:
+        bpy.context.view_layer.update()
+    except Exception:
+        pass
     return want
 
 
@@ -118,6 +160,7 @@ def add_objaverse_props(keep_path: str, rng: np.random.Generator,
             continue
         if not objs:
             fail += 1
+            print(f"{log_prefix} 跳过 {os.path.basename(p)}: load_obj 返回空")
             continue
         try:
             o = _join(objs)
@@ -125,6 +168,8 @@ def add_objaverse_props(keep_path: str, rng: np.random.Generator,
             longest = _normalize_size(o, size_min, size_max, rng)
             if longest < 0:
                 fail += 1
+                print(f"{log_prefix} 跳过 {os.path.basename(p)}: 包围盒退化"
+                      f"（顶点数 {len(getattr(o.blender_obj, 'data').vertices) if hasattr(o, 'blender_obj') else '?'}）")
                 continue
             sizes.append(longest)
             o.set_rotation_euler(bproc.sampler.uniformSO3())
