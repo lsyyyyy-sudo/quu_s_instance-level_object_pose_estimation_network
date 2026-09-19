@@ -157,8 +157,18 @@ def add_objaverse_props(keep_path: str, rng: np.random.Generator,
                         size_min: float = 0.025, size_max: float = 0.10,
                         bin_area: float = 0.16, spawn_z0: float = 0.05,
                         spawn_z_step: float = 0.03,
+                        target_objs: list | None = None,
+                        cover_ratio: float = 0.7,
                         log_prefix: str = "[props]"):
-    """往场景里加 n_props 个 Objaverse 物体（随机大小/朝向，悬在箱子上方交给物理塌落）。
+    """往场景里加 n_props 个 Objaverse 物体。**静态摆放，不参与物理。**
+
+    两种模式：
+      A) 给了 target_objs -> **压在目标物体上造遮挡**（cover_ratio 控制遮挡强度）
+      B) 没给 -> 黄金角螺旋撒在地面上（只做场景多样性）
+
+    为什么静态：实测干扰物一旦参与物理，和相机/地板一起模拟时会爆炸
+    （物体被抛到 z = -18.8 m）。静态物体没有刚体，重叠不产生力，彻底消掉这个
+    失败模式 —— 这也是唯一能同时做到"有遮挡"和"不爆炸"的办法。
 
     Args:
         keep_path: uid->glb 清单 json 路径
@@ -208,19 +218,36 @@ def add_objaverse_props(keep_path: str, rng: np.random.Generator,
                 continue
             sizes.append(longest)
             o.set_rotation_euler(bproc.sampler.uniformSO3())
-            # 水平用【黄金角螺旋】撒开（原来只递增 z，xy 几乎重合 -> 互相穿透）
-            ang = k * 2.399963                      # golden angle (rad)
-            rad = 0.0 if n_props <= 1 else (0.35 + 0.65 * (k / max(n_props - 1, 1)))
-            # ⚠️ 高度按"物体自己的一半尺寸"贴地摆，不参与物理。
-            #    为什么不让它们掉：实测单独掉落是好的（能落在地板上），
-            #    但【和 6 个相机 + 地板一起模拟时会炸】—— 物体被抛到 z=-18.8 m。
-            #    干扰物的作用是「场景多样性 + 自然遮挡」，静态摆放完全够用，
-            #    而静态摆放彻底消掉了这个失败模式（没有刚体就没有爆炸）。
-            o.set_location([
-                float(np.cos(ang) * rad * half),
-                float(np.sin(ang) * rad * half),
-                float(max(0.004, longest * 0.5)),   # 贴地：中心 = 半个最长边
-            ])
+
+            if target_objs:
+                # ── A) 压盖模式：挑一个目标，静态地压在它上面，造遮挡 ──
+                # 为什么这样安全：干扰物是【静态的】（enable_rigidbody(False)），
+                # 静态物体之间/与目标重叠【不会产生任何力】，所以不会像 GEO2 那样爆
+                # 炸，又能真正挡住目标的一部分。
+                # cover_ratio=0 -> 完全对中（遮最狠）；=1 -> 完全错开（不遮）。
+                tgt = target_objs[int(rng.integers(0, len(target_objs)))]
+                tl = np.array(tgt.get_location(), dtype=float)
+                try:
+                    t_half = float(np.max(_world_extent(tgt))) * 0.5
+                except Exception:
+                    t_half = 0.035
+                ang = float(rng.uniform(0.0, 2.0 * np.pi))
+                off = (cover_ratio * (t_half + longest * 0.5)
+                       * float(rng.uniform(0.0, 1.0)))
+                o.set_location([
+                    float(tl[0] + np.cos(ang) * off),
+                    float(tl[1] + np.sin(ang) * off),
+                    float(tl[2] + t_half + longest * 0.35),   # 悬在目标上方
+                ])
+            else:
+                # ── B) 撒地模式：黄金角螺旋铺在地面上（只做场景多样性，不遮挡）──
+                ang = k * 2.399963                      # golden angle (rad)
+                rad = 0.0 if n_props <= 1 else (0.35 + 0.65 * (k / max(n_props - 1, 1)))
+                o.set_location([
+                    float(np.cos(ang) * rad * half),
+                    float(np.sin(ang) * rad * half),
+                    float(max(0.004, longest * 0.5)),   # 贴地：中心 = 半个最长边
+                ])
             o.enable_rigidbody(False, collision_shape="BOX", mass=1.0, friction=100.0,
                                linear_damping=0.99, angular_damping=0.99)
             out.append(o)
@@ -231,7 +258,9 @@ def add_objaverse_props(keep_path: str, rng: np.random.Generator,
                   f"{type(e).__name__}: {e}")
 
     stats = {"ok": ok, "fail": fail, "n_pick": len(picks),
-             "size_median": float(np.median(sizes)) if sizes else -1.0}
+             "size_median": float(np.median(sizes)) if sizes else -1.0,
+             "mode": "cover" if target_objs else "scatter"}
     print(f"{log_prefix} 加了 {ok}/{len(picks)} 个 Objaverse 物体"
-          f"（失败 {fail}，最长边中位 {stats['size_median']*1000:.1f} mm）")
+          f"（模式 {stats['mode']}，失败 {fail}，"
+          f"最长边中位 {stats['size_median']*1000:.1f} mm）")
     return out, stats
