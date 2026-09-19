@@ -208,9 +208,16 @@ def add_objaverse_props(keep_path: str, rng: np.random.Generator,
                 continue
             sizes.append(longest)
             o.set_rotation_euler(bproc.sampler.uniformSO3())
+            # ⚠️ xy 必须【撒开】，不能只沿 z 叠。
+            #    踩过：原来只递增 z（0.05 + k*0.043），所有干扰物的 xy 几乎重合，
+            #    而它们的尺寸有 30~100 mm -> 生成时互相穿透 -> 物理爆炸。
+            #    实测被抛到 z = -18.8 m，整个场景作废。
+            #    这里用【黄金角螺旋】撒点，保证任意两个的 xy 间距 >= min_sep。
+            ang = k * 2.399963                      # golden angle (rad)
+            rad = 0.0 if n_props <= 1 else (0.35 + 0.65 * (k / max(n_props - 1, 1)))
             o.set_location([
-                float(rng.uniform(-half, half)),
-                float(rng.uniform(-half, half)),
+                float(np.cos(ang) * rad * half),
+                float(np.sin(ang) * rad * half),
                 float(spawn_z0 + k * spawn_z_step),
             ])
             o.enable_rigidbody(True, mass=1.0, friction=100.0,
