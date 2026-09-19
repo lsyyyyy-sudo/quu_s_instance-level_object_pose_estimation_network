@@ -208,25 +208,21 @@ def add_objaverse_props(keep_path: str, rng: np.random.Generator,
                 continue
             sizes.append(longest)
             o.set_rotation_euler(bproc.sampler.uniformSO3())
-            # ⚠️ xy 必须【撒开】，不能只沿 z 叠。
-            #    踩过：原来只递增 z（0.05 + k*0.043），所有干扰物的 xy 几乎重合，
-            #    而它们的尺寸有 30~100 mm -> 生成时互相穿透 -> 物理爆炸。
-            #    实测被抛到 z = -18.8 m，整个场景作废。
-            #    这里用【黄金角螺旋】撒点，保证任意两个的 xy 间距 >= min_sep。
+            # 水平用【黄金角螺旋】撒开（原来只递增 z，xy 几乎重合 -> 互相穿透）
             ang = k * 2.399963                      # golden angle (rad)
             rad = 0.0 if n_props <= 1 else (0.35 + 0.65 * (k / max(n_props - 1, 1)))
+            # ⚠️ 高度按"物体自己的一半尺寸"贴地摆，不参与物理。
+            #    为什么不让它们掉：实测单独掉落是好的（能落在地板上），
+            #    但【和 6 个相机 + 地板一起模拟时会炸】—— 物体被抛到 z=-18.8 m。
+            #    干扰物的作用是「场景多样性 + 自然遮挡」，静态摆放完全够用，
+            #    而静态摆放彻底消掉了这个失败模式（没有刚体就没有爆炸）。
             o.set_location([
                 float(np.cos(ang) * rad * half),
                 float(np.sin(ang) * rad * half),
-                float(spawn_z0 + k * spawn_z_step),
+                float(max(0.004, longest * 0.5)),   # 贴地：中心 = 半个最长边
             ])
-            o.enable_rigidbody(True, mass=1.0, friction=100.0,
-                               linear_damping=0.99, angular_damping=0.99,
-                               # ⚠️ 必须显式用 BOX 碰撞体。
-                               #    默认的 CONVEX 对 Objaverse 的【薄片物体】（海报/卡片/
-                               #    布料）会退化成零体积凸包 -> 没有碰撞 -> 直接穿过地板。
-                               #    实测它们垂直掉到 z = -18.8 m，整个场景作废。
-                               collision_shape="BOX")
+            o.enable_rigidbody(False, collision_shape="BOX", mass=1.0, friction=100.0,
+                               linear_damping=0.99, angular_damping=0.99)
             out.append(o)
             ok += 1
         except Exception as e:
