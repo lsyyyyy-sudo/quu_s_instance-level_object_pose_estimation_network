@@ -221,7 +221,12 @@ def add_objaverse_props(keep_path: str, rng: np.random.Generator,
                 float(spawn_z0 + k * spawn_z_step),
             ])
             o.enable_rigidbody(True, mass=1.0, friction=100.0,
-                               linear_damping=0.99, angular_damping=0.99)
+                               linear_damping=0.99, angular_damping=0.99,
+                               # ⚠️ 必须显式用 BOX 碰撞体。
+                               #    默认的 CONVEX 对 Objaverse 的【薄片物体】（海报/卡片/
+                               #    布料）会退化成零体积凸包 -> 没有碰撞 -> 直接穿过地板。
+                               #    实测它们垂直掉到 z = -18.8 m，整个场景作废。
+                               collision_shape="BOX")
             out.append(o)
             ok += 1
         except Exception as e:
