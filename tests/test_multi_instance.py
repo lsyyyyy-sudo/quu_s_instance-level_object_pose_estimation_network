@@ -129,3 +129,37 @@ def test_bad_channels_rejected():
     with pytest.raises(ValueError):
         gather_corners(torch.zeros(1, 8, 64, 64), torch.zeros(1, 2, dtype=torch.long),
                        torch.zeros(1, 2, dtype=torch.long))
+
+def test_center_is_in_crop_pixels_like_corners():
+    """⚠️ 回归测试：decode 返回的 center 必须和 corners 同一坐标系（裁剪像素）。
+
+    这个 bug 的表现非常隐蔽：解码出的【数量】和 GT 完全一致，
+    只是位置全都差了 stride 倍（4x），于是 recall 只有 3%。
+    如果不是逐级追踪（GT 数 / NMS 后格点数 / topk / 匹配数），
+    很容易误判成"检测器没学会"。
+
+    这里直接验证：offset 里 8 个角点相对中心的偏移恒为 (dx, dy) 时，
+    解出的 center 和 corners 之间必须正好差 (dx, dy)。
+    """
+    h = w = 32
+    stride = 4.0
+    hm = _make_heatmap(h, w, [(8, 8)])
+    off = torch.zeros(1, 16, h, w)
+    dx, dy = 5.0, -3.0
+    off[0, 0::2, 8, 8] = dx       # x 偏移
+    off[0, 1::2, 8, 8] = dy       # y 偏移
+
+    out = decode_instances(hm, off, thr=0.3, topk=10, min_dist=3.0,
+                           stride=stride)[0]
+    assert len(out) == 1
+    inst = out[0]
+
+    # center 必须是裁剪像素（= 格坐标 x stride），不是格坐标
+    assert inst["center"] == (8 * stride, 8 * stride), (
+        f"center 应为裁剪像素 {(8*stride, 8*stride)}，实际 {inst['center']}"
+    )
+    # corners = offset + 格位置(裁剪像素)
+    expect = np.array([[8 * stride + dx, 8 * stride + dy]] * 8)
+    assert np.allclose(inst["corners"], expect), (
+        f"corners 与 center 坐标系不一致:\n{inst['corners']}\nvs\n{expect}"
+    )

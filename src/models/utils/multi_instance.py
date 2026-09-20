@@ -152,6 +152,8 @@ def decode_instances(heatmap: torch.Tensor, offset: torch.Tensor,
         长度为 B 的列表；每个元素是实例 dict 列表，每个 dict::
 
             {"score": float, "center": (x, y), "corners": np.ndarray [8,2]}
+
+        ``center`` 和 ``corners`` **都是裁剪像素坐标**（已乘 stride）。
     """
     if heatmap.shape[1] != 1:
         raise ValueError(f"heatmap 期望 1 通道，得到 {heatmap.shape[1]}")
@@ -172,7 +174,13 @@ def decode_instances(heatmap: torch.Tensor, offset: torch.Tensor,
                 continue
             inst.append({
                 "score": s,
-                "center": (float(xs[b, i]), float(ys[b, i])),
+                # ⚠️ center 必须和 corners 用【同一套坐标系】= 裁剪像素。
+                #    之前这里直接给了热图格坐标 (0~heatmap_size)，
+                #    而 corners 已经乘过 stride，两者差 stride 倍（=4），
+                #    导致和 GT 中心（裁剪像素）比较时距离 50~150 px，
+                #    全部匹配失败（实测 recall 只有 3%，但解码数量其实和 GT 一样）。
+                "center": (float(xs[b, i]) * float(stride),
+                           float(ys[b, i]) * float(stride)),
                 "corners": corners[b, i].cpu().numpy(),
             })
         out.append(inst)
