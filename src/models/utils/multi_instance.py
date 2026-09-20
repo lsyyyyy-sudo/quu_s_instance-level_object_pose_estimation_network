@@ -67,15 +67,22 @@ def topk_peaks(heatmap: torch.Tensor, k: int = 100,
 
 
 def gather_corners(offset: torch.Tensor, ys: torch.Tensor,
-                   xs: torch.Tensor) -> torch.Tensor:
+                   xs: torch.Tensor, stride: float = 1.0) -> torch.Tensor:
     """在给定像素位置读出 8 个角点。
 
+    坐标系约定（与 ``src/loss/utils/multi_instance_loss.py`` 严格一致）
+    ----------------------------------------------------------------
+    热图格子 ``(hx, hy)`` 对应裁剪图的 ``(hx*stride, hy*stride)``。
+    ``offset[:, :, hy, hx]`` = 8 个角点在**裁剪像素**下相对该点的偏移。
+    所以角点 = ``offset + (hx*stride, hy*stride)``。
+
     Args:
-        offset: ``[B, 16, h, w]``（8 角点 x 2 坐标，**相对该像素**）
+        offset: ``[B, 16, h, w]``（8 角点 x 2 坐标，相对格子对应位置）
         ys, xs: ``[B, k]`` 峰位置（热图坐标系）
+        stride: ``image_size / heatmap_size``，把热图格子换算成裁剪像素
 
     Returns:
-        ``[B, k, 8, 2]``，**热图坐标系**下每个实例的 8 个角点
+        ``[B, k, 8, 2]``，**裁剪像素坐标系**下每个实例的 8 个角点
     """
     B, C, h, w = offset.shape
     if C != 16:
@@ -85,7 +92,7 @@ def gather_corners(offset: torch.Tensor, ys: torch.Tensor,
     idx = (ys * w + xs).unsqueeze(1).expand(B, C, k)        # [B,C,k]
     vals = flat.gather(2, idx)                              # [B,C,k]
     vals = vals.permute(0, 2, 1).reshape(B, k, 8, 2)        # [B,k,8,2]
-    base = torch.stack([xs, ys], dim=-1).unsqueeze(2).to(vals.dtype)   # [B,k,1,2]
+    base = (torch.stack([xs, ys], dim=-1).unsqueeze(2).to(vals.dtype) * float(stride))
     return vals + base
 
 
@@ -128,7 +135,8 @@ def greedy_nms(scores: torch.Tensor, ys: torch.Tensor, xs: torch.Tensor,
 
 def decode_instances(heatmap: torch.Tensor, offset: torch.Tensor,
                      thr: float = 0.05, topk: int = 100,
-                     nms_kernel: int = 3, min_dist: float = 3.0) -> List[List[dict]]:
+                     nms_kernel: int = 3, min_dist: float = 3.0,
+                     stride: float = 1.0) -> List[List[dict]]:
     """端到端解码：中心热图 + 角点偏移 -> 每张图的实例列表。
 
     Args:
@@ -138,6 +146,7 @@ def decode_instances(heatmap: torch.Tensor, offset: torch.Tensor,
         topk:    每张图最多输出几个实例
         nms_kernel: max-pool NMS 邻域（奇数）
         min_dist:   贪心 NMS 的最小实例间距（热图格）
+        stride:     image_size / heatmap_size，输出角点用裁剪像素
 
     Returns:
         长度为 B 的列表；每个元素是实例 dict 列表，每个 dict::
@@ -151,7 +160,7 @@ def decode_instances(heatmap: torch.Tensor, offset: torch.Tensor,
     scores, ys, xs = topk_peaks(hm, k=topk, thr=thr)
     keep = greedy_nms(scores, ys, xs, min_dist=min_dist)
     scores = torch.where(keep, scores, torch.zeros_like(scores))
-    corners = gather_corners(offset.detach(), ys, xs)       # [B,k,8,2]
+    corners = gather_corners(offset.detach(), ys, xs, stride=stride)  # [B,k,8,2]
 
     B = heatmap.shape[0]
     out: List[List[dict]] = []
