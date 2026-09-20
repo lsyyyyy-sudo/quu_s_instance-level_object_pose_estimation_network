@@ -32,12 +32,29 @@ class HeatmapDecoder(nn.Module):
         heatmap_size: int = 64,
         upsample_mode: str = "bilinear",
         offset: bool = False,
+        center_heatmap: bool = False,
     ):
+        """
+        Args:
+            center_heatmap: **多实例模式**。
+
+                单实例（False，默认）：主头输出 ``num_keypoints`` 个通道，
+                    每个角点一张热图 —— 只能表示**一个**物体。
+                多实例（True）：主头只输出 **1** 个通道的【物体中心热图】，
+                    峰的个数 = 实例个数；每个实例的 8 个角点从 ``offset``
+                    分支（``num_keypoints*2`` 通道）在峰的位置读出。
+                    这是 CenterNet 的做法，天然支持数量可变的多个实例。
+        """
         super().__init__()
         self.num_keypoints = num_keypoints
         self.heatmap_size = heatmap_size
         self.upsample_mode = upsample_mode
         self.offset = offset
+        self.center_heatmap = center_heatmap
+        if center_heatmap and not offset:
+            raise ValueError(
+                "center_heatmap=True 需要 offset=True —— 否则没有地方回归 8 个角点"
+            )
 
         # 1x1 侧向连接，把所有 stage 压到 hidden_dim
         self.lateral = nn.ModuleList(
@@ -48,10 +65,11 @@ class HeatmapDecoder(nn.Module):
             [nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, padding=1) for _ in in_channels_list]
         )
 
+        head_out = 1 if center_heatmap else num_keypoints
         self.head = nn.Sequential(
             nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, padding=1),
             nn.ReLU(inplace=True),
-            nn.Conv2d(hidden_dim, num_keypoints, kernel_size=1),
+            nn.Conv2d(hidden_dim, head_out, kernel_size=1),
         )
 
         if offset:
