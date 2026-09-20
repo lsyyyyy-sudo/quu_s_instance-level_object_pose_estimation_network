@@ -22,6 +22,7 @@ import hydra
 import numpy as np
 import torch
 from omegaconf import DictConfig
+import pytorch_lightning as pl
 from torch import nn
 
 from src.models.CornerPoseModel import CornerPoseModel
@@ -29,7 +30,7 @@ from src.models.utils.multi_instance import decode_instances
 from src.loss.utils.multi_instance_loss import multi_instance_loss
 
 
-class MultiInstanceLightningModel(nn.Module):
+class MultiInstanceLightningModel(pl.LightningModule):
     """多实例训练/验证模块。"""
 
     def __init__(
