@@ -41,11 +41,23 @@ def center_focal_loss(pred_logits: torch.Tensor, gt_heatmap: torch.Tensor,
     if pred_logits.shape != gt_heatmap.shape:
         raise ValueError(f"形状不一致: {tuple(pred_logits.shape)} vs {tuple(gt_heatmap.shape)}")
     p = torch.sigmoid(pred_logits).clamp(1e-4, 1 - 1e-4)
-    pos = gt_heatmap.ge(1.0 - 1e-4).float()          # 峰值处 = 正样本
+    # ⚠️ 正样本判据放宽到 0.9（而不是 >= 1-1e-4）。
+    #    原来那个判据要求 GT 峰【精确】等于 1.0；只要数据集把峰放在浮点位置，
+    #    就会一个正样本都匹配不到 -> 中心头没有监督 -> 塌缩（ALGO-08 第二次踩）。
+    #    现在数据集已对齐格点，这里是第二道保险。
+    pos = gt_heatmap.ge(0.9).float()
     neg = 1.0 - pos
     pos_loss = -torch.log(p) * torch.pow(1 - p, alpha) * pos
     neg_loss = -torch.log(1 - p) * torch.pow(p, alpha) * torch.pow(1 - gt_heatmap, beta) * neg
     n_pos = pos.sum()
+    if float(n_pos) == 0.0:
+        # 不再静默：没有正样本 = 这一项根本没起作用，必须大声说出来
+        import warnings
+        warnings.warn(
+            "center_focal_loss: 正样本数为 0！GT 热图里没有任何值 >= 0.9。"
+            "检查数据集是否把高斯峰放在整数格点上（见 src/datasets/bop_pbr.py）。",
+            RuntimeWarning, stacklevel=2,
+        )
     loss = (pos_loss + neg_loss).sum()
     return loss / n_pos.clamp_min(1.0)
 

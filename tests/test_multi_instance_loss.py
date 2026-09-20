@@ -201,3 +201,43 @@ def test_bad_shape_rejected():
         gather_corners(torch.zeros(1, 8, HM, HM),
                        torch.zeros(1, 2, dtype=torch.long),
                        torch.zeros(1, 2, dtype=torch.long))
+
+def test_gt_heatmap_has_exact_peaks():
+    """⚠️ 回归测试：GT 中心热图必须有【精确等于 1.0】的格点。
+
+    这是 ALGO-08（focal 零正样本）的同一个坑，今天第二次踩：
+    数据集把高斯峰放在浮点位置 -> 没有任何格子等于 1.0
+    -> focal 的 pos 掩码（gt >= 1-1e-4）一个都匹配不到
+    -> 中心头没有监督 -> 塌缩成"处处无物体" -> recall = 0
+    （实测 8 个实例的 batch 只有 1 个正样本格）。
+
+    这里用数据集【真实的】构造逻辑复现一遍。
+    """
+    import numpy as np
+
+    HM, IMG, sigma = 64, 256, 2.0
+    scale = HM / float(IMG)
+    yy, xx = np.mgrid[0:HM, 0:HM]
+    rng = np.random.default_rng(7)
+    hm = np.zeros((1, HM, HM), dtype=np.float32)
+    centers = rng.uniform(40, 200, size=(6, 2))       # 浮点中心
+    for c in centers:
+        gx = float(np.round(c[0] * scale))
+        gy = float(np.round(c[1] * scale))
+        gx = min(max(gx, 0.0), HM - 1.0)
+        gy = min(max(gy, 0.0), HM - 1.0)
+        g = np.exp(-((xx - gx) ** 2 + (yy - gy) ** 2) / (2 * sigma ** 2)).astype(np.float32)
+        g[int(gy), int(gx)] = 1.0
+        hm[0] = np.maximum(hm[0], g)
+
+    n_exact = int((hm >= 1.0 - 1e-6).sum())
+    assert n_exact >= len(centers), (
+        f"精确等于 1.0 的格点只有 {n_exact} 个，放了 {len(centers)} 个实例 "
+        "-> focal 匹配不到正样本"
+    )
+
+    gt = torch.from_numpy(hm)[None]
+    assert float(gt.ge(0.9).sum()) >= len(centers), "放宽到 0.9 后仍匹配不到正样本"
+    logits = _logits_from_gt(gt)
+    loss = float(center_focal_loss(logits, gt))
+    assert np.isfinite(loss) and loss < 5.0, f"完美热图的 focal 过大: {loss}"

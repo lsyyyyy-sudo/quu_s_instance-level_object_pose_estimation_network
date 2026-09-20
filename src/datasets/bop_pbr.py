@@ -463,10 +463,19 @@ class BOPPBRDataset(Dataset):
                 valid[i] = 1.0
                 inst_visib[i] = d["visib"]
                 # 中心热图：在该实例中心放一个高斯峰（取 max 防止重叠处叠加爆炸）
-                gx = d["center"][0] * scale
-                gy = d["center"][1] * scale
+                #
+                # ⚠️ 峰值必须**落在整数格点上**，否则 gt 里没有任何格子等于 1.0，
+                #    而 focal loss 用 `gt >= 1-1e-4` 判正样本 -> 一个正样本都没有
+                #    -> 中心头没有监督 -> 塌缩成"处处无物体" -> recall = 0。
+                #    （实测 8 个实例的 batch 只有 1 个正样本格。这是 ALGO-08 的同一个坑。）
+                #    CenterNet 的标准做法也是把 GT 中心对齐到特征图格子。
+                gx = float(np.round(d["center"][0] * scale))
+                gy = float(np.round(d["center"][1] * scale))
+                gx = min(max(gx, 0.0), self.heatmap_size - 1.0)
+                gy = min(max(gy, 0.0), self.heatmap_size - 1.0)
                 g = np.exp(-((xx - gx) ** 2 + (yy - gy) ** 2)
                            / (2.0 * self.center_sigma ** 2)).astype(np.float32)
+                g[int(gy), int(gx)] = 1.0        # 显式保证峰值为 1
                 ctr_hm[0] = np.maximum(ctr_hm[0], g)
 
             out.update({
