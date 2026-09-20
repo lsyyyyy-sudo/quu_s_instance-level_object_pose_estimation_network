@@ -1,0 +1,66 @@
+# 多实例模型配置：单图 -> (中心热图 + 角点偏移) -> N 个实例 x 8 角点
+#
+# 与 configs/model/heatmap.yaml 的区别：
+#   decoder.center_heatmap: true   主头输出 1 通道中心热图（峰数 = 实例数）
+#   decoder.offset:         true   16 通道角点偏移
+#   _target_                MultiInstanceLightningModel
+#
+# 骨干/FPN 与单实例版完全一致（12.0M 参数不变）。
+defaults:
+  - loss: default
+  - opt: default
+  - metrics: default
+  - vis: default
+
+_target_: src.lightning.multi_instance_lightning_model.MultiInstanceLightningModel
+
+resume_ckpt: "${hydra:runtime.cwd}/checkpoints/${exp_name}/last.ckpt"
+pretrained_ckpt: "${hydra:runtime.cwd}/checkpoints/${pretrain_name}/last.ckpt"
+
+modules:
+  # ---- 主骨干（图里的 "ViT/ResNet"）----
+  encoder:
+    name: 'resnet'
+    resnet:
+      ckpt_path: null
+      cfg:
+        model_type: 'resnet18'
+        pretrained: true
+        freeze: false
+        out_indices: [0, 1, 2, 3]
+    dinov2:
+      ckpt_path: null
+      cfg:
+        model_type: 'dinov2_vitb14'
+        freeze: true
+
+  # ---- 解码头：中心热图 + 角点偏移 ----
+  decoder:
+    hidden_dim: 128
+    num_keypoints: ${num_keypoints}   # 8，offset 分支因此是 16 通道
+    heatmap_size: ${heatmap_size}
+    upsample_mode: 'bilinear'
+    head_type: 'heatmap'
+    offset: true
+    center_heatmap: true
+
+  task:
+    num_keypoints: ${num_keypoints}
+    bbox_representation: ${bbox_representation}
+    corner_order: ${corner_order}
+    image_size: ${image_size}
+    heatmap_size: ${heatmap_size}
+    heatmap_style: ${heatmap_style}
+    extraction: 'topk'
+    topk: 20
+    soft_argmax_beta: 25.0
+
+# ---- 多实例专属超参 ----
+multi:
+  center_weight: 1.0
+  corner_weight: 1.0
+  geo_weight: 1.0        # 几何一致性（零内参）；设 0 关闭
+  det_thr: 0.3           # 推理：中心热图峰阈值
+  det_topk: 30           # 推理：每张图最多输出几个实例
+  min_dist: 3.0          # 贪心 NMS 的最小实例间距（热图格）
+  match_dist: 20.0       # 评测时预测-GT 匹配的最大中心距离（裁剪像素）

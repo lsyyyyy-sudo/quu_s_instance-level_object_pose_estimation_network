@@ -1,0 +1,32 @@
+# 多实例训练入口。
+# 用法：python run.py --config-name=train_multi.yaml
+defaults:
+  - trainer: default
+  - model: multi_instance
+  - datamodule: bop
+  - callbacks: default
+  - logger: default
+  - hydra: default
+  - _self_
+
+seed: 42
+max_epochs: 300
+exp_name: MULTI
+pretrain_name: MULTI
+
+mode: 'train'
+resume: false
+use_pretrained: false
+
+# ---- 任务超参 ----
+num_keypoints: 8
+bbox_representation: 'heatmap'
+corner_order: 'bb8'
+# 多实例用 centernet 风格：中心热图必须保持 logits 交给 focal。
+# （boxdreamer 的 2*sigmoid-1 是给逐角点热图用的）
+heatmap_style: 'boxdreamer'
+
+image_size: 256
+heatmap_size: 64
+
+precision: '32-true'

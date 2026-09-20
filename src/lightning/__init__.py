@@ -7,5 +7,6 @@
 """
 
 from src.lightning.corner_pose_lightning_model import PL_CornerPose
+from src.lightning.multi_instance_lightning_model import MultiInstanceLightningModel
 
-__all__ = ["PL_CornerPose"]
+__all__ = ["PL_CornerPose", "MultiInstanceLightningModel"]

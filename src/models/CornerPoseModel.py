@@ -86,6 +86,9 @@ class CornerPoseModel(nn.Module):
             heatmap_size=self.heatmap_size,
             upsample_mode=str(self.decoder_cfg.get("upsample_mode", "bilinear")),
             offset=bool(self.decoder_cfg.get("offset", False)),
+            # 多实例模式：主头输出 1 通道【中心热图】（峰数 = 实例数），
+            # 8 个角点从 offset 分支（16 通道）读出。见 heatmap_head.py。
+            center_heatmap=bool(self.decoder_cfg.get("center_heatmap", False)),
         )
 
     # ------------------------------------------------------------------ #
@@ -108,6 +111,11 @@ class CornerPoseModel(nn.Module):
         out = self.decoder(feats)
 
         heatmap = out["heatmap"]
+        # 多实例模式：中心热图必须保持 **logits**，因为 focal loss 自己会 sigmoid。
+        # （boxdreamer 的 2*sigmoid-1 是给逐角点热图用的，套在中心热图上会毁掉 focal）
+        if self.decoder_cfg.get("center_heatmap", False):
+            return {"pred_heatmap": heatmap, "pred_offset": out.get("offset"),
+                    "center_heatmap_mode": True}
         if self.heatmap_style == "boxdreamer":
             heatmap = 2.0 * torch.sigmoid(heatmap) - 1.0
 
