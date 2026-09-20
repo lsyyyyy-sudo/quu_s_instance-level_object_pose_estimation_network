@@ -49,6 +49,11 @@ class CornerPoseDataModule(pl.LightningDataModule):
         crop_use_bbox_obj: bool = False,
         obj_paste_prob: float = 0.0,
         rgb_augmethods: Optional[Sequence[str]] = None,
+        multi_instance: bool = False,
+        multi_crop_scale: float = 2.5,
+        max_instances: int = 8,
+        center_sigma: float = 2.0,
+        instance_min_visib: float = 0.10,
     ):
         super().__init__()
         self.save_hyperparameters(logger=False)
@@ -86,6 +91,11 @@ class CornerPoseDataModule(pl.LightningDataModule):
             crop_use_bbox_obj=bool(crop_use_bbox_obj),
             obj_paste_prob=float(obj_paste_prob),
             rgb_augmethods=None if rgb_augmethods is None else list(rgb_augmethods),
+            multi_instance=bool(multi_instance),
+            multi_crop_scale=float(multi_crop_scale),
+            max_instances=int(max_instances),
+            center_sigma=float(center_sigma),
+            instance_min_visib=float(instance_min_visib),
             aug_seed=int(seed),
         )
         self._max_train_samples = max_train_samples
