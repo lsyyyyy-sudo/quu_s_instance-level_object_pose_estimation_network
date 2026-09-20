@@ -183,6 +183,11 @@ class BOPPBRDataset(Dataset):
         obj_paste_prob: float = 0.0,
         rgb_augmethods: Optional[Sequence[str]] = None,
         aug_seed: int = 0,
+        multi_instance: bool = False,
+        multi_crop_scale: float = 2.5,
+        max_instances: int = 8,
+        center_sigma: float = 2.0,
+        instance_min_visib: float = 0.10,
     ):
         super().__init__()
         self.dataset_root = dataset_root
@@ -221,6 +226,20 @@ class BOPPBRDataset(Dataset):
         self.rgb_augmethods = list(rgb_augmethods) if rgb_augmethods else []
         # 每个 worker 进程用自己的 rng，避免所有 worker 抽到同一串随机数
         self._rng = np.random.default_rng(aug_seed + (os.getpid() % 100000))
+
+        # ---- 多实例模式 ----
+        # 动机：目标视频里往往有多个同类相机，而单实例裁剪只监督一个，
+        # 模型只能靠"目标在裁剪图中心"这个位置先验去猜（实测 88.3% 的裁剪图
+        # 里混进了其他实例）。多实例模式下裁剪放大到 multi_crop_scale，
+        # **框内所有实例都监督**，"哪个是目标"这个问题就不存在了。
+        self.multi_instance = bool(multi_instance)
+        self.multi_crop_scale = float(multi_crop_scale)
+        self.max_instances = int(max_instances)
+        self.center_sigma = float(center_sigma)
+        self.instance_min_visib = float(instance_min_visib)
+        if self.multi_instance:
+            # 多实例必须用放大后的裁剪，否则框里只有一个物体
+            self.crop_scale = self.multi_crop_scale
 
         models_info_path = os.path.join(dataset_root, "models", "models_info.json")
         if not os.path.isfile(models_info_path):
@@ -408,7 +427,7 @@ class BOPPBRDataset(Dataset):
         visib_fract = float(_info.get("visib_fract", 1.0)) if _info else 1.0
         px_count_visib = int(_info.get("px_count_visib", -1)) if _info else -1
 
-        return {
+        out = {
             "image": image_t,                 # [3, H, W]
             "cam_K": K_t,                     # [3, 3]
             "bbox_3d": bbox_3d,               # [8, 3] 物体坐标系
@@ -421,6 +440,103 @@ class BOPPBRDataset(Dataset):
             "visib_fract": torch.tensor(visib_fract, dtype=torch.float32),
             "px_count_visib": torch.tensor(px_count_visib, dtype=torch.long),
         }
+
+        # ---- 多实例标签 ----
+        # 监督裁剪框内的【所有】实例：每个实例一个中心峰 + 8 个角点。
+        # 这样"哪个是目标"不再是问题 —— 全部都是目标。
+        if self.multi_instance:
+            insts = self._collect_crop_instances(
+                scene_gt, scene_gt_info, frame_id, K, self.image_size, bbox
+            )
+            n = len(insts)
+            ctr_hm = np.zeros((1, self.heatmap_size, self.heatmap_size), dtype=np.float32)
+            corners = np.zeros((self.max_instances, 8, 2), dtype=np.float32)
+            centers = np.zeros((self.max_instances, 2), dtype=np.float32)
+            valid = np.zeros((self.max_instances,), dtype=np.float32)
+            inst_visib = np.zeros((self.max_instances,), dtype=np.float32)
+
+            scale = self.heatmap_size / float(self.image_size)
+            yy, xx = np.mgrid[0:self.heatmap_size, 0:self.heatmap_size]
+            for i, d in enumerate(insts):
+                corners[i] = d["corners"]
+                centers[i] = d["center"]
+                valid[i] = 1.0
+                inst_visib[i] = d["visib"]
+                # 中心热图：在该实例中心放一个高斯峰（取 max 防止重叠处叠加爆炸）
+                gx = d["center"][0] * scale
+                gy = d["center"][1] * scale
+                g = np.exp(-((xx - gx) ** 2 + (yy - gy) ** 2)
+                           / (2.0 * self.center_sigma ** 2)).astype(np.float32)
+                ctr_hm[0] = np.maximum(ctr_hm[0], g)
+
+            out.update({
+                "center_heatmap": torch.from_numpy(ctr_hm),          # [1, h, w]
+                "inst_corners": torch.from_numpy(corners),           # [N, 8, 2]
+                "inst_centers": torch.from_numpy(centers),           # [N, 2] 裁剪像素
+                "inst_valid": torch.from_numpy(valid),               # [N]
+                "inst_visib": torch.from_numpy(inst_visib),          # [N]
+                "n_instances": torch.tensor(n, dtype=torch.long),
+            })
+        return out
+
+
+    # ------------------------------------------------------------------ #
+    def _collect_crop_instances(self, scene_gt, scene_gt_info, frame_id,
+                                K_crop, image_size, crop_box):
+        """收集【裁剪框内】的所有实例，返回裁剪坐标系下的角点与中心。
+
+        Args:
+            K_crop:     已按裁剪调整过的内参（crop_and_resize 的返回值）
+            crop_box:   裁剪用的 [x, y, w, h]（原图坐标），用于把中心判进框内
+
+        Returns:
+            list of dict: {"corners": [8,2], "center": [2], "visib": float,
+                           "obj_id": int, "gt_idx": int}
+            corners/center 都在**裁剪后的 image_size x image_size** 坐标系里。
+        """
+        anns = scene_gt.get(str(frame_id), [])
+        infos = scene_gt_info.get(str(frame_id), []) if scene_gt_info else []
+        K_t = torch.from_numpy(K_crop.astype(np.float32)).unsqueeze(0)
+
+        out = []
+        for j, ann in enumerate(anns):
+            obj_id = int(ann["obj_id"])
+            if obj_id not in self.bbox3d:
+                continue                    # 只关心我们建模的物体
+            R = np.array(ann["cam_R_m2c"], dtype=np.float64).reshape(3, 3)
+            t = np.array(ann["cam_t_m2c"], dtype=np.float64).reshape(3)
+            pose = torch.eye(4, dtype=torch.float32)
+            pose[:3, :3] = torch.from_numpy(R).float()
+            pose[:3, 3] = torch.from_numpy(t).float()
+
+            info = infos[j] if j < len(infos) else {}
+            visib = float(info.get("visib_fract", 1.0))
+            if visib < self.instance_min_visib:
+                continue                    # 几乎完全被挡的实例不要（噪声标签）
+
+            c2 = project_points(self.bbox3d[obj_id].unsqueeze(0),
+                                K_t, pose.unsqueeze(0))[0].numpy()   # [8,2]
+            if not np.all(np.isfinite(c2)):
+                continue
+            center = c2.mean(axis=0)
+
+            # 中心必须落在裁剪图内（留 2% 边距），否则这个实例只是擦边
+            m = 0.02 * image_size
+            if not (m <= center[0] <= image_size - m and m <= center[1] <= image_size - m):
+                continue
+
+            out.append({
+                "corners": c2.astype(np.float32),
+                "center": center.astype(np.float32),
+                "visib": visib,
+                "obj_id": obj_id,
+                "gt_idx": j,
+            })
+
+        # 按"离画面中心的距离"排序：目标实例通常最靠中间，放第一个便于对照
+        cx = image_size / 2.0
+        out.sort(key=lambda d: (d["center"][0] - cx) ** 2 + (d["center"][1] - cx) ** 2)
+        return out[: self.max_instances]
 
     # ------------------------------------------------------------------ #
     def _get_bbox(self, scene_gt_info, frame_id, gt_idx, bbox_3d, K, pose, image_shape) -> np.ndarray:
