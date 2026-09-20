@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Dict, List, Optional
 
 import hydra
@@ -167,6 +168,16 @@ class MultiInstanceLightningModel(pl.LightningModule):
                 continue
             self.log(f"val/{k}", v, on_step=False, on_epoch=True, batch_size=bs,
                      prog_bar=(k in ("recall", "err_matched")))
+        # ⚠️ 必须补记 val/corner_err_px：
+        # configs/callbacks/default.yaml 里的 ModelCheckpoint 监控这个键，
+        # 找不到会直接抛异常终止训练（实测在第 4 个 epoch 崩掉，白等 1 小时）。
+        # 多实例下的对应量是【匹配上的实例的平均角点误差】，语义一致。
+        # ⚠️ nan 会**静默不记录**，checkpoint 同样崩。所以用哨兵值兜底：
+        # 没有任何匹配时记一个很大的有限值（=裁剪图对角线），语义上表示全错。
+        e = M.get("err_matched")
+        if e is None or math.isnan(e):
+            e = float(self.model.image_size) * 1.5   # 384，远大于任何正常误差
+        self.log("val/corner_err_px", e, on_step=False, on_epoch=True, batch_size=bs)
 
     def test_step(self, batch: Dict, batch_idx: int) -> None:
         self.validation_step(batch, batch_idx)
