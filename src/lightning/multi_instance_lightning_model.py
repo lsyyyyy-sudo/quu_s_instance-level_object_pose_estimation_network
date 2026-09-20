@@ -40,11 +40,17 @@ class MultiInstanceLightningModel(nn.Module):
         metrics: Optional[DictConfig] = None,
         vis: Optional[DictConfig] = None,
         multi: Optional[DictConfig] = None,
+        **kwargs,
     ):
         super().__init__()
-        # metrics / vis 是 configs/model/*.yaml 的 defaults 带进来的，
-        # 多实例版暂时不用它们（指标在 _eval_instances 里单独算），
-        # 但签名必须接受，否则 hydra.utils.instantiate 会报 unexpected keyword。
+        # ⚠️ 必须吃 **kwargs。
+        # configs/model/*.yaml 里除了 modules/loss/opt/metrics/vis/multi，
+        # 还有 resume_ckpt / pretrained_ckpt 等【给训练入口用】的键，
+        # hydra.utils.instantiate(..., _recursive_=False) 会把它们全传进来。
+        # 逐个加参数会一直打地鼠（resume_ckpt -> pretrained_ckpt -> ...）。
+        self.extra_cfg = dict(kwargs)
+        self.resume_ckpt = kwargs.get("resume_ckpt")
+        self.pretrained_ckpt = kwargs.get("pretrained_ckpt")
         self.save_hyperparameters(ignore=["modules", "loss", "opt", "metrics", "vis", "multi"])
         self.model = CornerPoseModel(modules)
         self.loss_cfg = loss
