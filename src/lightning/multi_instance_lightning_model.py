@@ -37,10 +37,15 @@ class MultiInstanceLightningModel(nn.Module):
         modules: DictConfig,
         loss: DictConfig,
         opt: DictConfig,
+        metrics: Optional[DictConfig] = None,
+        vis: Optional[DictConfig] = None,
         multi: Optional[DictConfig] = None,
     ):
         super().__init__()
-        self.save_hyperparameters(ignore=["modules", "loss", "opt", "multi"])
+        # metrics / vis 是 configs/model/*.yaml 的 defaults 带进来的，
+        # 多实例版暂时不用它们（指标在 _eval_instances 里单独算），
+        # 但签名必须接受，否则 hydra.utils.instantiate 会报 unexpected keyword。
+        self.save_hyperparameters(ignore=["modules", "loss", "opt", "metrics", "vis", "multi"])
         self.model = CornerPoseModel(modules)
         self.loss_cfg = loss
         self.opt_cfg = opt
