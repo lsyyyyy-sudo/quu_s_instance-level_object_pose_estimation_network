@@ -118,9 +118,13 @@ class MultiInstanceLightningModel(pl.LightningModule):
             n_pred += len(ps)
 
             used_gt = set()
+            dev = gt_centers.device
             for p in ps:
-                pc = torch.tensor(p["corners"])                     # [8,2]
-                pcen = torch.tensor(p["center"])
+                # ⚠️ decode_instances 返回的是 numpy（CPU），必须搬到和 GT 同一个设备，
+                #    否则在 GPU 上跑会报 'Expected all tensors on the same device'。
+                #    这个 bug 之前被掩盖了：n_pred=0 时循环体不执行。
+                pc = torch.as_tensor(p["corners"], device=dev, dtype=gt_centers.dtype)
+                pcen = torch.as_tensor(p["center"], device=dev, dtype=gt_centers.dtype)
                 best, best_d = None, self.match_dist
                 for gi in gts:
                     if gi in used_gt:
@@ -133,7 +137,7 @@ class MultiInstanceLightningModel(pl.LightningModule):
                     n_match += 1
                     e = float(torch.linalg.norm(pc - gt_corners[b, best], dim=-1).mean())
                     errs.append(e)
-                    resids.append(float(concurrence_residual(pc[None])[0]))
+                    resids.append(float(concurrence_residual(pc[None].cpu())[0]))
 
         m = {
             "n_gt": float(n_gt), "n_pred": float(n_pred), "n_match": float(n_match),
