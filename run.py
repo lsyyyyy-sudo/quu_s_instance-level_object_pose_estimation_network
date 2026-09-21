@@ -27,6 +27,23 @@ from src.utils.log import ERROR, INFO, WARNING, finish, print_key_configs
 cv2.setNumThreads(0)
 os.environ["HYDRA_FULL_ERROR"] = "1"
 
+# ---- 卡死排查：运行中取 Python 栈 ----
+# AutoDL 这类容器禁掉了 ptrace，py-spy 会报 "Failed to copy Py_Version symbol:
+# Permission denied"，attaching 类工具全废。但**信号是可用的**，所以用
+# faulthandler：设置 DSH_FAULTHANDLER=1 后，`kill -USR1 <pid>` 就会把该进程
+# 所有线程的 Python 栈打到 stderr。dataloader worker 是 fork 出来的，会继承
+# 这个 handler，所以对 worker 发 SIGUSR1 也能拿到它的栈 —— 排查
+# "worker 100% CPU 空转、GPU 空闲、日志不增长" 这类卡死只能靠它。
+if os.environ.get("DSH_FAULTHANDLER") == "1":
+    import faulthandler
+    import signal as _signal
+
+    faulthandler.enable()
+    try:
+        faulthandler.register(_signal.SIGUSR1, all_threads=True, chain=False)
+    except (AttributeError, ValueError):  # 平台不支持就算了，不影响训练
+        pass
+
 
 def handle(config: DictConfig):
     """按配置组装并运行训练 / 测试。"""
