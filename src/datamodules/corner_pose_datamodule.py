@@ -1,7 +1,7 @@
 """LightningDataModule（对应 BoxDreamer/src/datamodules/BoxDreamer_datamodule.py）。"""
 
 import os
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Union
 
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader, Subset
@@ -20,7 +20,7 @@ class CornerPoseDataModule(pl.LightningDataModule):
 
     def __init__(
         self,
-        dataset_root: str,
+        dataset_root: Union[str, Sequence[str]],
         train_split: str = "train_pbr",
         val_split: str = "train_pbr",
         val_ratio: float = 0.05,
@@ -119,9 +119,18 @@ class CornerPoseDataModule(pl.LightningDataModule):
         )
 
     def setup(self, stage: Optional[str] = None):
-        if not os.path.isdir(self.dataset_root):
+        # dataset_root 可能是单个路径，也可能是【列表】（多路径合并训练）。
+        # Hydra 传进来的列表是 ListConfig，不能直接喂给 os.path.isdir，
+        # 否则报 "stat: path should be string ... not ListConfig"。
+        roots = self.dataset_root
+        if isinstance(roots, (str, bytes)):
+            roots = [roots]
+        else:
+            roots = [str(r) for r in roots]
+        missing = [r for r in roots if not os.path.isdir(r)]
+        if missing:
             raise FileNotFoundError(
-                f"dataset_root not found: {self.dataset_root}\n"
+                "dataset_root 不存在: " + ", ".join(missing) + "\n"
                 "请先用 HCCEPose 的 s2_p1_gen_pbr_data.py 渲染数据，"
                 "或用 datamodule.dataset_root=<你的路径> 覆盖配置。"
             )
