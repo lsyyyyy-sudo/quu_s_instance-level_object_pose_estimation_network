@@ -1,6 +1,11 @@
 # 日志器配置
 # in_use 里列出的才会被 run.py 实例化；往里面加 'wandb' 即可启用 wandb。
-in_use: [csv]
+#
+# ⚠️ TensorBoard 的 save_dir 指向 /root/tf-logs —— AutoDL 自带的 TensorBoard
+#    进程监视的就是这个目录（`tensorboard --logdir /root/tf-logs --port 6007`）。
+#    如果写默认的 outputs/<exp>/tb，AutoDL 的 TB 面板看不到。
+#    用 name: ${exp_name} 按实验名分目录，避免多个实验的曲线混在一起。
+in_use: [csv, tensorboard]
 
 csv:
   _target_: pytorch_lightning.loggers.CSVLogger
@@ -10,8 +15,8 @@ csv:
 
 tensorboard:
   _target_: pytorch_lightning.loggers.TensorBoardLogger
-  save_dir: ${hydra:runtime.cwd}/outputs/${exp_name}
-  name: 'tb'
+  save_dir: /root/tf-logs
+  name: ${exp_name}
 
 wandb:
   _target_: pytorch_lightning.loggers.WandbLogger
