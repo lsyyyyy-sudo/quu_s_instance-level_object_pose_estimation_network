@@ -71,20 +71,36 @@ GEO7 -> quu_s_GEO7/checkpoints/GEO7/last.ckpt
 
 **渲染脚本必须单独备份** —— 它们在 `bp_ws/`，既不在仓库也不在 `data/results`。
 
-## 4. 本地已备份（`data/results/remote_backup/`）
+## 4. 本地已备份（`data/results/remote_backup/`，共 547.7 MB）
 
 | 文件 | 字节数 | 内容 |
 |---|---|---|
-| `results_small.tar.gz` | 65,930 | GEO8 的 metrics.csv + 曲线 + 关键日志 |
-| `results_all.tar.gz` | 7,208,291 | 1279 个文件：所有克隆的 outputs/configs + 135 个日志 |
+| `results_small.tar.gz` | 65,930 | GEO8 的 metrics.csv + 曲线 + 关键日志（22 个条目） |
+| `results_all.tar.gz` | 7,208,291 | 1279 个条目：7 个克隆的 outputs/configs + 135 个日志 |
+| `results_scripts.tar.gz` | 849,965 | 198 个条目：**`bp_ws/` 全部渲染脚本 + 所有仓库外的 .py/.sh** |
 | `train_v1_last.ckpt` | 141,098,264 | 合成集最好（4.12 px / 96.88%） |
 | `GEO7_last.ckpt` | 141,098,328 | 真实视频最好（IoU 0.799） |
 | `GEO8_last.ckpt` | 141,099,352 | 有增强那一臂（epoch 94） |
 | `MIGEO7_last.ckpt` | 142,889,464 | 多实例（recall 0.828） |
 
+全部字节数与远端**精确一致**（用 `stat -c%s` 逐个核对，避免再踩"下载被截断"
+那个坑 —— 之前 66,912,256 / 142,889,464 的截断让 `torch.load` 报
+`PytorchStreamReader failed reading zip archive`）。
+
+**`results_scripts.tar.gz` 里最关键的三个文件**：
+- `bp_ws/gen_pbr_data_demo.py`（35 KB）—— **生成全部训练数据的 BlenderProc 脚本**
+- `bp_ws/preview_object.py`、`bp_ws/check_mesh.py`、`bp_ws/make_cc0textures.py`
+- 各实验的 driver `.sh`
+
 **没下载但仍留在数据盘上的**：`E0~E7`、`GEO1`、`GEO2`、`B1`、`B2`、`P1`、
-`OLD25`、`CMB`、`fit*/fitc*/eval_*`、`MSTEPS`/`W0`/`W8`/`SMOKE_*`（共约 8.8 GB）。
+`OLD25`、`CMB`、`fit*/fitc*/eval_*`、`MSTEPS`/`W0`/`W8`/`SMOKE_*`（共约 8.8 GB），
+以及数据本身 `/root/autodl-tmp/bop`（1.7 GB）、
+`dji_action4_hybrid_dataset.tar.gz`（357 MB）、`handoff.tar.gz`（248 MB）、
+`qa_artifacts.tar.gz`（247 MB）、Blender 3.6（2.5 GB）、conda 环境（788 MB）。
 **只关机会保留；释放前需要重新评估是否要下载。**
+
+`hf_cache`（28 GB）是 HuggingFace 模型缓存，可重新下载，不必备份。
+
 
 ## 5. 恢复步骤（换实例/重开机后）
 
