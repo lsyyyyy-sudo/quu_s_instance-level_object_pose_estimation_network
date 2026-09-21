@@ -96,6 +96,9 @@
 ├── tests/                                      # 自检用例（不需要数据）
 ├── requirements.txt / pyproject.toml
 ├── docs/
+│   ├── PROJECT_SUMMARY.md                      # ⭐⭐ 结果总览：做到了什么 / 瓶颈在哪 / 下一步
+│   ├── RESULTS.md                              # ⭐ 全部实验结果（按实验组织，含被证伪的假设）
+│   ├── CHECKPOINTS.md                          # ⭐ 产物台账：每个 checkpoint 是什么、指标、在哪
 │   ├── REFERENCES.md                           # 参考论文 / 代码的阅读索引
 │   ├── DATA.md                                 # 数据放哪、从哪来、许可与收集清单
 │   ├── CLOUD_SETUP.md                          # 阶段① 云端 3D 生成环境（AutoDL）完整可复现记录
