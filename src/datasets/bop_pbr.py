@@ -19,12 +19,16 @@
 GT 位姿，以及监督用的 2D 角点与高斯热图。
 
 对应 BoxDreamer/src/datasets/ 里的各数据集实现（这里只有 BOP PBR 一种）。
+
+``dataset_root`` 支持单个路径，也支持 **多个路径**（列表，或逗号分隔的字符串），
+用于把多批渲染数据合起来训练（例如 v1 的 4969 个 + GEO7 的 3958 个单实例样本）。
+多根时各根的 ``train_pbr/`` 索引拼在一起，``models/`` 从第一个能找到的根加载。
 """
 
 import json
 import os
 import random
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import cv2
 import numpy as np
@@ -161,7 +165,7 @@ class BOPPBRDataset(Dataset):
 
     def __init__(
         self,
-        dataset_root: str,
+        dataset_root: Union[str, Sequence[str]],
         split: str = "train_pbr",
         obj_ids: Sequence[int] = (1,),
         image_size: int = 256,
@@ -253,10 +257,19 @@ class BOPPBRDataset(Dataset):
             # 多实例必须用放大后的裁剪，否则框里只有一个物体
             self.crop_scale = self.multi_crop_scale
 
-        models_info_path = os.path.join(dataset_root, "models", "models_info.json")
-        if not os.path.isfile(models_info_path):
+        # models_info.json 从各个根里找（合并训练时每个 BOP 根都有自己的 models/）。
+        # 注意用 self.dataset_root 而不是参数 dataset_root —— 后者在多根时是列表，
+        # 直接喂 os.path.join 会 TypeError: expected str ... not ListConfig。
+        models_info_path = None
+        for root in self.dataset_roots:
+            cand = os.path.join(root, "models", "models_info.json")
+            if os.path.isfile(cand):
+                models_info_path = cand
+                break
+        if models_info_path is None:
             raise FileNotFoundError(
-                f"models_info.json not found: {models_info_path}\n"
+                "models_info.json not found under any dataset root: "
+                + ", ".join(self.dataset_roots) + "\n"
                 "先跑 HCCEPose 的 s1_p3_obj_infos.py 生成它（见 README 的流水线说明）。"
             )
         with open(models_info_path, "r", encoding="utf-8") as f:
@@ -273,7 +286,8 @@ class BOPPBRDataset(Dataset):
 
         if len(self.samples) == 0:
             raise RuntimeError(
-                f"No samples found under {os.path.join(dataset_root, split)} "
+                f"No samples found under "
+                f"{[os.path.join(r, split) for r in self.dataset_roots]} "
                 f"for obj_ids={self.obj_ids}. 渲染数据是否已经生成？"
             )
 
