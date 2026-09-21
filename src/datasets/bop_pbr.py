@@ -190,7 +190,19 @@ class BOPPBRDataset(Dataset):
         instance_min_visib: float = 0.10,
     ):
         super().__init__()
-        self.dataset_root = dataset_root
+        # 支持单个路径，或【多个路径】（用列表 / 逗号分隔的字符串）。
+        # 多路径用于合并数据集训练（v1 的 5000 + GEO7 的 3958 个单实例样本）。
+        # 索引元素 (scene_dir, frame_id, gt_idx) 里的 scene_dir 自带根路径，
+        # 所以 __getitem__ 不需要知道根，只有 _build_index 要遍历。
+        if isinstance(dataset_root, str):
+            roots = [r for r in (x.strip() for x in dataset_root.split(",")) if r]
+        else:
+            roots = [str(r) for r in dataset_root]
+        if not roots:
+            raise ValueError("dataset_root 不能为空")
+        self.dataset_roots = roots
+        # 保留 dataset_root = 第一个根：models/ 从这里加载，也兼容老代码
+        self.dataset_root = roots[0]
         self.split = split
         self.obj_ids = list(obj_ids)
         self.image_size = int(image_size)
@@ -267,40 +279,50 @@ class BOPPBRDataset(Dataset):
 
     # ------------------------------------------------------------------ #
     def _build_index(self) -> List[Tuple[str, int, int]]:
-        """扫描 split 目录下所有 scene，建立 (scene_dir, frame_id, gt_idx) 索引。"""
-        split_dir = os.path.join(self.dataset_root, self.split)
-        if not os.path.isdir(split_dir):
-            raise FileNotFoundError(f"Split directory not found: {split_dir}")
+        """扫描所有根的 split 目录，建立 (scene_dir, frame_id, gt_idx) 索引。
 
+        支持多根：每个根贡献自己的样本，最后拼在一起（用于合并数据集训练）。
+        """
         samples: List[Tuple[str, int, int]] = []
         n_skip_px = n_skip_frac = 0
-        for scene_name in sorted(os.listdir(split_dir)):
-            scene_dir = os.path.join(split_dir, scene_name)
-            gt_path = os.path.join(scene_dir, "scene_gt.json")
-            if not os.path.isfile(gt_path):
-                continue
-            with open(gt_path, "r", encoding="utf-8") as f:
-                scene_gt = json.load(f)
-            # scene_gt_info.json 里的 px_count_visib / visib_fract 用来做可见性过滤
-            scene_gti = self._load_scene_json(scene_dir, "scene_gt_info.json")
-            for frame_id, annotations in scene_gt.items():
-                frame_info = scene_gti.get(str(frame_id), [])
-                for gt_idx, ann in enumerate(annotations):
-                    if int(ann["obj_id"]) not in self.obj_ids:
-                        continue
-                    if 0 <= gt_idx < len(frame_info):
-                        info = frame_info[gt_idx]
-                        if int(info.get("px_count_visib", 1 << 30)) < self.min_px_visib:
-                            n_skip_px += 1
+        per_root = []
+        for root in self.dataset_roots:
+            split_dir = os.path.join(root, self.split)
+            if not os.path.isdir(split_dir):
+                raise FileNotFoundError(f"Split directory not found: {split_dir}")
+            before = len(samples)
+            for scene_name in sorted(os.listdir(split_dir)):
+                scene_dir = os.path.join(split_dir, scene_name)
+                gt_path = os.path.join(scene_dir, "scene_gt.json")
+                if not os.path.isfile(gt_path):
+                    continue
+                with open(gt_path, "r", encoding="utf-8") as f:
+                    scene_gt = json.load(f)
+                # scene_gt_info.json 的 px_count_visib / visib_fract 用来做可见性过滤
+                scene_gti = self._load_scene_json(scene_dir, "scene_gt_info.json")
+                for frame_id, annotations in scene_gt.items():
+                    frame_info = scene_gti.get(str(frame_id), [])
+                    for gt_idx, ann in enumerate(annotations):
+                        if int(ann["obj_id"]) not in self.obj_ids:
                             continue
-                        if float(info.get("visib_fract", 1.0)) < self.min_visib_fract:
-                            n_skip_frac += 1
-                            continue
-                    samples.append((scene_dir, int(frame_id), gt_idx))
+                        if 0 <= gt_idx < len(frame_info):
+                            info = frame_info[gt_idx]
+                            if int(info.get("px_count_visib", 1 << 30)) < self.min_px_visib:
+                                n_skip_px += 1
+                                continue
+                            if float(info.get("visib_fract", 1.0)) < self.min_visib_fract:
+                                n_skip_frac += 1
+                                continue
+                        samples.append((scene_dir, int(frame_id), gt_idx))
+            per_root.append((root, len(samples) - before))
         if n_skip_px or n_skip_frac:
             print(f"[bop_pbr] 可见性过滤：丢掉 {n_skip_px} 个 px_count_visib<{self.min_px_visib}"
                   f"、{n_skip_frac} 个 visib_fract<{self.min_visib_fract}，"
                   f"保留 {len(samples)} 个样本")
+        if len(self.dataset_roots) > 1:
+            print("[bop_pbr] 多根合并：" + "  ".join(
+                f"{os.path.basename(os.path.dirname(r.rstrip('/')))}={n}"
+                for r, n in per_root))
         return samples
 
     def _load_scene_json(self, scene_dir: str, name: str) -> dict:
