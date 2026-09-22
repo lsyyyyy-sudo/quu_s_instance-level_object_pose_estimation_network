@@ -336,13 +336,16 @@ K 只出现在可选的 `solvePnP` 后处理里（`configs/model/metrics/default
 │   ├── qa_scene.py                              # 单场景质检门（PASS/FAIL + 退出码）
 │   └── remote.py                                # 云端实例操作
 ├── tests/                                       # 84 个自检用例（不需要数据）
-└── docs/                                        # 见下方文档索引
+└── docs/
+    ├── figures/                                 # ⭐ 图示库（7 类 16 张 + 索引）
+    └── *.md                                     # 文档，见下方文档索引
 ```
 
 ### 文档索引
 
 | 文档 | 内容 |
 |---|---|
+| [`figures/`](docs/figures/README.md) | ⭐⭐ **图示库（7 类 16 张）**：数据集 / 模型在数据集 / 模型在视频 / 多实例，每张注明看点与数字来源 |
 | [`PROJECT_SUMMARY.md`](docs/PROJECT_SUMMARY.md) | ⭐⭐ **结果总览：做到了什么 / 瓶颈在哪 / 下一步** |
 | [`RESULTS.md`](docs/RESULTS.md) | 全部实验（按实验组织，含被证伪的假设与五次实验设计错误） |
 | [`TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) | 踩坑日志：50+ 条问题定位记录 |
