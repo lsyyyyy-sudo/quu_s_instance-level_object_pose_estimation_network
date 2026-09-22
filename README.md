@@ -145,22 +145,32 @@ K 只出现在可选的 `solvePnP` 后处理里（`configs/model/metrics/default
 
 ### 2.5 结果图
 
-<p align="center">
-  <img src="docs/figures/render_gt.jpg" width="620" alt="合成数据 + GT 3D 框投影">
-</p>
-
-*合成数据样例：绿框 = GT 3D 包围盒按 GT 位姿投影，红叉 = 8 个角点。
-画面里除了多台 DJI，还有 **Objaverse 异类道具**（遮挡与外观多样性）。*
+完整图示库（16 张，按「数据集 → 模型在数据集 → 模型在视频 → 多实例」组织）见
+**[`docs/figures/`](docs/figures/README.md)**，每张图都注明该看哪里、数字从哪来。挑几张：
 
 <p align="center">
-  <img src="docs/figures/render_geo7.png" width="620" alt="GEO7 渲染样例">
+  <img src="docs/figures/01_dataset_v1/v1_fullframe_gt_projection.jpg" width="620" alt="v1 整帧渲染 + GT 标注">
 </p>
 
-*GEO7 渲染样例：随机资产 + 随机屏幕内容 + 随机色温/曝光。*
+*数据集 v1：**绿框** = 目标实例的 `bbox_visib`，**红圈** = 目标 8 角点按 GT 位姿投影，
+**灰框** = 其他同类实例。画面里**每一个物体都是同一款 DJI** —— 这是 `DATA-27` 最直观的证据。*
 
-> 真实目标视频上的预测结果图（单模型好/坏样本、三模型并排对比）可用
-> `scripts/make_video_result_sheets.py` 一键生成。
-> 素材是项目方提供的视频，**暂未放入本仓库**（版权 + 体积）。
+<p align="center">
+  <img src="docs/figures/02_dataset_geo7/geo_series_static_cover_with_gt.jpg" width="620" alt="GEO 系列：异类道具压盖 + GT 框">
+</p>
+
+*GEO 系列（静态压盖实验）：带 GT 3D 框投影，可见**异类 Objaverse 道具**压在 DJI 上造遮挡 ——
+这是"造遮挡"唯一成功的做法（料箱堆叠那版造出大量无解样本）。*
+
+<p align="center">
+  <img src="docs/figures/03_v1_on_dataset/v1_best4_worst4.png" width="620" alt="v1 在合成集上的 best/worst">
+</p>
+
+*v1 在合成集上的最好/最差各 4 个：**上排误差 1.0~1.4 px 且 `visb=1.00`；
+下排 71.7~141.9 px 且 `visb≈0.25`** —— 失败全部集中在严重遮挡样本上（§3.1 的 57 倍差距）。*
+
+> 目标视频上的结果图（v1 / GEO7 / 多实例共 8 张）在 `docs/figures/04_*`、`06_*`、`07_*`。
+> 原始视频文件（277 MB）按 `docs/DATA.md` 的约定不入库，这里放的只是结果截图。
 
 ---
 
