@@ -1943,6 +1943,88 @@ sed: can't read /root/autodl-tmp/bp_ws/geo6.sh: No such file or directory
 
 ---
 
+### ENV-21 ⚠️ 无卡模式想跑 BoxDreamer：权重能下，但**推理一定被 SIGKILL**
+
+**时间**：2026-09-23（用户问"无卡模式能不能用 BoxDreamer 预测目标视频"）
+
+**结论：不能。** 但**准备工作全部可以做完**，而且这一步的排查过程本身有四个可复用的发现。
+
+#### 一、能做的（已全部完成并校验）
+
+| 项 | 结果 |
+|---|---|
+| BoxDreamer 代码 + 子模块 | ✅ `three/dust3r` + `three/dust3r/croco` + `three/GroundingDINO` 全部 init |
+| DUSt3R 权重 | ✅ 2,285,005,731 B，`zipfile.testzip()` 通过（1005 条目） |
+| BoxDreamer 权重 | ✅ `yyh929/BoxDreamer` 的 `BoxDreamer-vitb.safetensor`（354.6 MB / 177 张量）+ `-reproduce` 变体 |
+| GroundingDINO | ✅ `groundingdino_swint_ogc.pth` 0.69 GB + `grounding-dino-tiny`（HF 11 文件） |
+| 目标视频 | ✅ 290 MB 上传完成 |
+
+**⚠️ 校验大权重不能用 `torch.load`** —— DUSt3R 2.29 GB 在这个 2 GB 上限下必然 OOM。
+用**只读元数据**的办法：`.pth` 是 zip，`zipfile.ZipFile(p).testzip()` 就能验完整性；
+`.safetensor` 用 `safetensors.safe_open` 只读 header。
+
+#### 二、🔴 推理为什么不行（逐步定位）
+
+`python -u` 每步 flush，结果：
+
+```
+STEP boot                             RSS=  9 MB
+STEP imported torch                   RSS=364 MB
+STEP imported transformers            RSS=555 MB
+STEP model loaded                     RSS=609 MB
+STEP frame read ok=True (2464,3248,3) RSS=714 MB   <- 读 3248x2464 的帧没问题
+STEP   W=64 processor done (0.4s)     RSS=682 MB
+                                      <- 死在这里：model(**inputs)
+真实退出码 = 137（SIGKILL）
+```
+
+**在输入只有 64×48 的情况下第一次前向就被 SIGKILL**，而且 **det_w 取 256 / 384 / 512
+全都一样死** ⇒ **不是图像太大**，是这个栈在 2 GB 上限下跑不了前向。
+
+**`oom_kill=0` 但 `memory.max` 命中 66,962 次** ⇒ 杀进程的是 **AutoDL 平台层的监管**，
+不是内核 cgroup OOM killer（后者会累加 `oom_kill`）。
+另外 `memory.current` 里**含页缓存**（实测 `file` 项占 385 MB，正是 HF 权重的缓存）
+⇒ 真正留给进程的余量**远小于 2 GB**。
+
+**⇒ 与 `ENV-16`（1 核配额 0.5 / 2 GB / 无 GPU）一致：无卡模式只能做纯 CPU 的准备与
+纯 numpy/json 的分析，任何 ViT 级模型的前向都不行。**
+
+#### 三、⚠️ `from_pretrained` 必须配 `HF_HUB_OFFLINE=1`，否则表现为"卡死"
+
+第一次跑时日志刷满：
+```
+'[Errno 99] Cannot assign requested address' thrown while requesting HEAD
+  https://huggingface.co/IDEA-Research/grounding-dino-tiny/resolve/main/processor_config.json
+Retrying in 8s [Retry 5/5].
+```
+`from_pretrained` 会去 HF 做**检查更新**的 HEAD 请求，在 turbo 代理下报 `Errno 99`，
+然后**每个文件重试 5 次 × 8 秒**，几分钟里一个输出都没有 —— 看着像卡死。
+
+**权重已经全部缓存好时，就该强制离线：**
+```bash
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1   # 一个网络请求都不发
+```
+**效果**：载入从"卡几分钟"变成 **4 秒**。**离线模式不要再 source network_turbo**（徒增拖慢）。
+
+#### 四、⚠️ 我的仪表本身也是坑：块缓冲 + SIGKILL = 日志丢失
+
+探测脚本原先用普通 `print`，重定向到文件时是**块缓冲**；进程被 SIGKILL 时
+**缓冲区直接丢掉**，于是"最后打印的那一行"根本不是真正的死点 ——
+我因此一度以为它死在读帧。**必须 `python -u` 或每行 `flush=True`。**
+
+**教训（与 `ENV-12` 同族）**：
+- ⚠️ **"卡住"和"被静默杀掉"在日志上可以长得一模一样**，必须拿**真实退出码**
+  （`cmd | tail` 拿到的是 `tail` 的退出码，见 `ENV-12`）+ **逐步骤 flush**。
+- ⚠️ **内存类故障要先看 `memory.current` 里页缓存占了多少** ——
+  限额是"进程 + 页缓存"共享的，只看进程 RSS 会低估。
+- ⚠️ **`oom_kill=0` 不等于"没被杀"**：平台层监管杀进程不会累加 cgroup 计数器。
+
+**影响文件**：`/root/autodl-tmp/bd/`（代码 + 权重 + 视频 + 探测脚本）；
+新增仓库脚本 `scripts/detect_gdino_frames.py`（原 `detect_grounding_dino.py`
+把路径硬编码成 Windows 路径，Linux 上根本不能用）。
+
+---
+
 ### DATA-24 ⚠️ 干扰物摆在物理**之前** → `sample_poses` 重试风暴，整体慢 3.6 倍
 
 **症状**：50 场景的渲染预计要 15 小时（**18 分钟/场景**）。但量了 rgb 文件的
