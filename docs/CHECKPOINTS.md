@@ -134,35 +134,43 @@ git clone https://github.com/lsyyyyy-sudo/quu_s_instance-level_object_pose_estim
 | `INSTANCE_MANIFEST.txt` | ⭐ **实例完整清单**：磁盘 / 8 个克隆的 HEAD / 全部 59 个 checkpoint / 权重与下载 URL / 数据 / 渲染脚本 / md5 去重 |
 | `bd_small.tar.gz` | 16.5 MB / 602 文件：BoxDreamer 工作树（含 dust3r/croco/GroundingDINO 子模块）+ 全部下载日志与探测输出 |
 | `CKPT_DOWNLOAD_LIST.txt` | 去重后的待搬清单（36 条，一行一个远端路径） |
-| `ckpt_misc/` | **18 个 / 2.57 GB 已落地**，18 个缺（见下） |
+| `ckpt_misc/` | ✅ **36 个 / 4.94 GB 全部落地并通过校验** |
 
 **去重省了一半**：59 个 ckpt 文件只有 **39 种内容**（`last.ckpt` 与 `last-v1.ckpt`
 大多是同一份），排除已存的 4 个（`train_v1`/`GEO7`/`GEO8`/`MIGEO7`）后要搬 36 个。
 
-### ⚠️ 还缺 18 个（远端中途关机，`ENV-22`）
+**本地备份总计 5.49 GB**（36 个 ckpt + 4 个关键 ckpt + 3 个归档包 + 清单）。
 
-```
-eval_softargmax__last.ckpt      eval_softargmax__last-v1.ckpt   eval_argmax__last-v1.ckpt
-eval_v1__last.ckpt              eval_topk__last-v1.ckpt         fit_bin__last-v1.ckpt
-fit_nobin__last-v1.ckpt         fitc_v1__last-v1.ckpt           train_v4__last-v1.ckpt
-SMOKE_MI2__last.ckpt            gpu_smoke__last-v1.ckpt         W0__last.ckpt
-E2_focal_coarse_only__last-v1.ckpt   E2b_focal_fixed__last-v1.ckpt
-E3b_focal_smallfine__last-v1.ckpt    E4_noaug_100ep__last-v1.ckpt
-E5_noaug_300ep__last-v1.ckpt         MI30b__last-v1.ckpt
-```
+### 校验结果（两道）
 
-**实例回来后一条命令续传**（断点续传 + 尺寸校验 + 重试，已完成的自动跳过）：
+| 校验 | 结果 |
+|---|---|
+| 权威尺寸比对（`--dry-run`，逐文件比 `stat` 得到的远端大小） | ✅ **需要下载 0 个 / 已完成 36 个**，退出码 0 |
+| **zip 结构完整性**（截断的文件读不出中央目录） | ✅ **36/36 完好，0 异常** |
+
+### ⚠️ 中途被中断过一次，而且**新工具当场抓到一个被截断的文件**
+
+第一次搬运（`foreach { remote.py get }` 循环）搬到第 18 个时**远端关机**，
+后 18 个全失败，且循环自己还报 `exit 0`（详见 `ENV-22`）。
+
+实例恢复后续传时，`fetch_remote_files.py` 报
+**"需要下载 19 个；已完成 17 个"** —— 而我手工数是 18 已完成。
+差的那 1 个正是 **`E6_dinov2_224/last-v1.ckpt`：本地 351,469,568 B，
+远端 356,466,898 B，被截断了 5 MB**。`Test-Path` 判不出来（文件存在），
+**只有比尺寸才发现** —— 这正是 `ENV-22` 记的那个坑，工具把它堵上了。
+
+> 换句话说：如果没有尺寸校验，这个 truncated 的 ckpt 会被永久当成"已完成"，
+> 直到某天 `torch.load` 报 `PytorchStreamReader failed reading zip archive`
+> 才发现 —— 而那时原始文件可能已经不在了。
+
+**续传命令**（以后再搬东西可复用；已完成的会自动跳过）：
 
 ```bash
 python scripts/fetch_remote_files.py \
     --list data/results/remote_backup/CKPT_DOWNLOAD_LIST.txt \
     --out  data/results/remote_backup/ckpt_misc
-# 只想看还缺哪些、不下载：
+# 只比对尺寸、报缺口，不下载：
 python scripts/fetch_remote_files.py --list ... --out ... --dry-run
 ```
 
-⚠️ 注意：这 18 个里**权重可重下**（URL 在 `INSTANCE_MANIFEST.txt`），
-**数据可重渲**，只有 checkpoint 是不可再生的。而缺失的这 18 个恰好是
-消融/拟合实验（`E2~E5`、`fit*`、`eval_*`、`SMOKE_*`、`W0/W8`）——
-**它们的指标都已记在本文档第 2 节的表里**，所以即使补不回来，信息也不丢。
 
