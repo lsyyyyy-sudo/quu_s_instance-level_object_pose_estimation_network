@@ -122,3 +122,47 @@ git clone https://github.com/lsyyyyy-sudo/quu_s_instance-level_object_pose_estim
       或 AprilTag 反投影拿真值。
 - [ ] 域差距：真实 DJI **屏幕点亮 + 贴标签**，渲染的是干净模型。渲修改造未开始。
 - [ ] `crop_use_bbox_obj` 建议改 `true`（标签是 amodal，裁剪也该用 amodal 框）。
+
+---
+
+## 7. 2026-09-23 补充：第二批备份（剩余 checkpoint）
+
+### 已完成
+
+| 文件 | 内容 |
+|---|---|
+| `INSTANCE_MANIFEST.txt` | ⭐ **实例完整清单**：磁盘 / 8 个克隆的 HEAD / 全部 59 个 checkpoint / 权重与下载 URL / 数据 / 渲染脚本 / md5 去重 |
+| `bd_small.tar.gz` | 16.5 MB / 602 文件：BoxDreamer 工作树（含 dust3r/croco/GroundingDINO 子模块）+ 全部下载日志与探测输出 |
+| `CKPT_DOWNLOAD_LIST.txt` | 去重后的待搬清单（36 条，一行一个远端路径） |
+| `ckpt_misc/` | **18 个 / 2.57 GB 已落地**，18 个缺（见下） |
+
+**去重省了一半**：59 个 ckpt 文件只有 **39 种内容**（`last.ckpt` 与 `last-v1.ckpt`
+大多是同一份），排除已存的 4 个（`train_v1`/`GEO7`/`GEO8`/`MIGEO7`）后要搬 36 个。
+
+### ⚠️ 还缺 18 个（远端中途关机，`ENV-22`）
+
+```
+eval_softargmax__last.ckpt      eval_softargmax__last-v1.ckpt   eval_argmax__last-v1.ckpt
+eval_v1__last.ckpt              eval_topk__last-v1.ckpt         fit_bin__last-v1.ckpt
+fit_nobin__last-v1.ckpt         fitc_v1__last-v1.ckpt           train_v4__last-v1.ckpt
+SMOKE_MI2__last.ckpt            gpu_smoke__last-v1.ckpt         W0__last.ckpt
+E2_focal_coarse_only__last-v1.ckpt   E2b_focal_fixed__last-v1.ckpt
+E3b_focal_smallfine__last-v1.ckpt    E4_noaug_100ep__last-v1.ckpt
+E5_noaug_300ep__last-v1.ckpt         MI30b__last-v1.ckpt
+```
+
+**实例回来后一条命令续传**（断点续传 + 尺寸校验 + 重试，已完成的自动跳过）：
+
+```bash
+python scripts/fetch_remote_files.py \
+    --list data/results/remote_backup/CKPT_DOWNLOAD_LIST.txt \
+    --out  data/results/remote_backup/ckpt_misc
+# 只想看还缺哪些、不下载：
+python scripts/fetch_remote_files.py --list ... --out ... --dry-run
+```
+
+⚠️ 注意：这 18 个里**权重可重下**（URL 在 `INSTANCE_MANIFEST.txt`），
+**数据可重渲**，只有 checkpoint 是不可再生的。而缺失的这 18 个恰好是
+消融/拟合实验（`E2~E5`、`fit*`、`eval_*`、`SMOKE_*`、`W0/W8`）——
+**它们的指标都已记在本文档第 2 节的表里**，所以即使补不回来，信息也不丢。
+
