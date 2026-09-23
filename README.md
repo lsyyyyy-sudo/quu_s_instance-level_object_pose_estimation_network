@@ -5,6 +5,8 @@
 > 全流程自建：**三维模型生成 → 合成数据渲染 → 网络实现 → 训练 → 真实视频测试**。
 >
 > **结果总览 →** [`docs/PROJECT_SUMMARY.md`](docs/PROJECT_SUMMARY.md) ｜
+> **图示库 →** [`docs/figures/`](docs/figures/README.md) ｜
+> **汇报 PPT →** [`docs/ppt/`](docs/ppt/README.md) ｜
 > **实验记录 →** [`docs/RESULTS.md`](docs/RESULTS.md) ｜
 > **踩坑日志 →** [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) ｜
 > **权重台账 →** [`docs/CHECKPOINTS.md`](docs/CHECKPOINTS.md)
@@ -323,21 +325,35 @@ K 只出现在可选的 `solvePnP` 后处理里（`configs/model/metrics/default
 │   └── loss/{loss.py, utils/{focal_loss,geo_consistency,multi_instance_loss}.py}
 ├── scripts/
 │   ├── mesh_to_bop.py                  # .glb -> BOP PLY（保纹理简化 / 压小文本）
-│   ├── verify_{bop,dataloader,pnp}.py  # 三条独立自检：标注投影 / 热图峰 / PnP 往返
+│   ├── repair_texture_atlas.py         # 纹理图集 padding（填掉 UV 岛之间的噪声空白）
+│   ├── axis_views.py                   # 六向正交投影判物体朝向
+│   ├── verify_bop.py                   # 自检①：3D 框按 GT 位姿投影回 RGB
+│   ├── verify_dataloader.py            # 自检②：重投影一致 + 热图峰对准角点
+│   ├── verify_pnp.py                   # 自检③：GT 角点必须精确还原 GT 位姿
 │   ├── eval_corners.py                 # ⭐ 统一口径的角点评测（含遮挡分层）
-│   ├── eval_{best_worst,multi_best_worst}.py
-│   ├── demo_video{,_gdino,_track,_multi}.py     # 真实视频推理
-│   ├── detect_grounding_dino.py                 # 开放词汇检测（复用 BoxDreamer 路径）
-│   ├── render_single_instance.sh                # ⭐ 单实例版数据渲染（1 DJI + 多道具）
-│   ├── analyze_instance_ambiguity.py            # 量化裁剪污染与位置捷径
-│   ├── diag_{dataload,throughput,dm}.py         # 数据加载诊断
-│   ├── merge_bop_roots.py / merge_bop_shards.py
-│   ├── make_video_result_sheets.py              # 结果拼图（PPT 复用）
-│   ├── qa_scene.py                              # 单场景质检门（PASS/FAIL + 退出码）
-│   └── remote.py                                # 云端实例操作
+│   ├── eval_best_worst.py              # 逐样本最好/最差对照图
+│   ├── eval_multi_best_worst.py        # 多实例版
+│   ├── demo_video.py                   # 真实视频推理（手工框）
+│   ├── demo_video_gdino.py             # 真实视频推理（GroundingDINO 出框 → 网络出角点）
+│   ├── demo_video_track.py             # 跟踪版
+│   ├── demo_video_multi.py             # 多实例全帧推理
+│   ├── detect_grounding_dino.py        # 开放词汇检测（复用 BoxDreamer 路径）
+│   ├── detect_gdino_frames.py          # ⭐ 可移植版（原版把路径硬编码成 Windows）
+│   ├── make_video_result_sheets.py     # 结果拼图（PPT 复用）
+│   ├── make_ppt_minimal.py             # ⭐ 生成汇报 PPT（图文内容都在脚本里）
+│   ├── render_single_instance.sh       # ⭐ 单实例版数据渲染（1 DJI + 多道具）
+│   ├── analyze_instance_ambiguity.py   # 量化裁剪污染与位置捷径
+│   ├── diag_dataload.py / diag_throughput.py / diag_dm.py   # 数据加载诊断三件套
+│   ├── merge_bop_roots.py / merge_bop_shards.py             # 多根合并
+│   ├── qa_scene.py                     # 单场景质检门（PASS/FAIL + 退出码）
+│   ├── plot_training_curves.py         # 从 metrics.csv 画训练曲线
+│   ├── check_repo.py                   # ⭐ 仓库体检（敏感文件 / 链接 / 体积，可接 CI）
+│   ├── fetch_remote_files.py           # ⭐ 断点续传搬远端文件（先取尺寸→逐个校验→重试）
+│   └── remote.py                       # 云端实例操作（凭据走环境变量，不入库）
 ├── tests/                                       # 84 个自检用例（不需要数据）
 └── docs/
     ├── figures/                                 # ⭐ 图示库（7 类 16 张 + 索引）
+    ├── ppt/                                     # ⭐ 汇报 PPT（10 页 + 预览图 + 生成脚本说明）
     └── *.md                                     # 文档，见下方文档索引
 ```
 
@@ -346,10 +362,11 @@ K 只出现在可选的 `solvePnP` 后处理里（`configs/model/metrics/default
 | 文档 | 内容 |
 |---|---|
 | [`figures/`](docs/figures/README.md) | ⭐⭐ **图示库（7 类 16 张）**：数据集 / 模型在数据集 / 模型在视频 / 多实例，每张注明看点与数字来源 |
+| [`ppt/`](docs/ppt/README.md) | ⭐ **汇报 PPT（10 页）**：按「数据集主线 / 模型主线 / 效果」组织，含预览图与再生成方法 |
 | [`PROJECT_SUMMARY.md`](docs/PROJECT_SUMMARY.md) | ⭐⭐ **结果总览：做到了什么 / 瓶颈在哪 / 下一步** |
 | [`RESULTS.md`](docs/RESULTS.md) | 全部实验（按实验组织，含被证伪的假设与五次实验设计错误） |
 | [`TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) | 踩坑日志：50+ 条问题定位记录 |
-| [`CHECKPOINTS.md`](docs/CHECKPOINTS.md) | 产物台账：每个权重的指标 / 位置 / 恢复步骤 |
+| [`CHECKPOINTS.md`](docs/CHECKPOINTS.md) | 产物台账：每个权重的指标 / 位置 / 本地备份清单 / 恢复步骤 |
 | [`TRAINING.md`](docs/TRAINING.md) | 网络设计、集成验证结论、怎么跑 |
 | [`DATA.md`](docs/DATA.md) / [`DATASET_v1.md`](docs/DATASET_v1.md) | 数据放哪、从哪来、许可、验收 |
 | [`RENDER_SETUP.md`](docs/RENDER_SETUP.md) / [`CLOUD_SETUP.md`](docs/CLOUD_SETUP.md) | 渲染与云端环境（含踩坑，可复现） |
