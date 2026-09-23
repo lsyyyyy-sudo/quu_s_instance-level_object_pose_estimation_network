@@ -15,7 +15,7 @@ refs/
 docs/ASSIGNMENT.md
 
 # 人类自己的实验笔记（本文件由人类所有，仅本地保留）
-# ⚠️ 它和下面那些截图**曾经被误提交并公开**过（见 docs/TROUBLESHOOTING.md 的 GIT-01）。
+# ⚠️ 它和下面那些截图**曾经被误提交并公开**过（见 docs/TROUBLESHOOTING.md 的 GIT-02）。
 #    已从当前版本移出（git rm --cached）；公开历史里仍有旧副本，但已确认内容不敏感，
 #    故不做历史重写。加规则是为了**不再复发** —— 否则下一次 `git add .` 会原样带回来。
 #    自动检查见 scripts/check_repo.py（第 3 项：敏感文件是否被跟踪）。
